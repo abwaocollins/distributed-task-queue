@@ -10,6 +10,16 @@ import Config
 config :distributed_task_queue,
   generators: [timestamp_type: :utc_datetime]
 
+# Configures the Ecto repository
+config :distributed_task_queue, ecto_repos: [DistributedTaskQueue.Repo]
+
+config :distributed_task_queue, DistributedTaskQueue.Repo,
+  database: "distributed_task_queue_dev",
+  username: "postgres",
+  password: "password",
+  hostname: "localhost",
+  port: 5432
+
 # Configures the endpoint
 config :distributed_task_queue, DistributedTaskQueueWeb.Endpoint,
   url: [host: "localhost"],
