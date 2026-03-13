@@ -16,7 +16,8 @@ defmodule DistributedTaskQueue.Application do
       # Start a worker by calling: DistributedTaskQueue.Worker.start_link(arg)
       # {DistributedTaskQueue.Worker, arg},
       # Start to serve requests, typically the last entry
-      DistributedTaskQueueWeb.Endpoint
+      DistributedTaskQueueWeb.Endpoint,
+      DistributedTaskQueue.Repo
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html
