@@ -3,9 +3,9 @@ defmodule DistributedTaskQueue.Queue do
   import Ecto.Changeset
 
   schema "queues" do
-    field :name, :string
-    field :description, :string
-    field :max_concurrent_jobs, :integer, default: 5
+    field(:name, :string)
+    field(:description, :string)
+    field(:max_concurrent_jobs, :integer, default: 5)
 
     timestamps()
   end

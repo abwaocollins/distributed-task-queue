@@ -9,7 +9,15 @@ defmodule DistributedTaskQueue.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
-      deps: deps()
+      deps: deps(),
+      test_coverage: [tool: ExCoveralls],
+      preferred_cli_env: [
+        coveralls: :test,
+        "coveralls.json": :test,
+        "coveralls.html": :test,
+        dialyzer: :test,
+        credo: :test
+      ]
     ]
   end
 
@@ -56,7 +64,15 @@ defmodule DistributedTaskQueue.MixProject do
       {:dns_cluster, "~> 0.1.1"},
       {:bandit, "~> 1.5"},
       {:ecto_sql, "~> 3.13"},
-      {:postgrex, "~> 0.22.0"}
+      {:postgrex, "~> 0.22.0"},
+
+      # Testing dependencies
+      {:excoveralls, "~> 0.18.5", only: :test},
+      {:ex_machina, "~> 2.8", only: :test},
+
+      # Linting & Code Quality
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
   end
 

@@ -1,5 +1,15 @@
 import Config
 
+# db configs
+# Configure your database
+config :distributed_task_queue, DistributedTaskQueue.Repo,
+  username: "postgres",
+  password: "password",
+  hostname: "localhost",
+  database: "distributed_task_queue_test",
+  stacktrace: true,
+  pool: Ecto.Adapters.SQL.Sandbox
+
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
 config :distributed_task_queue, DistributedTaskQueueWeb.Endpoint,

@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:14-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: distributed_task_queue_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Elixir
+        uses: erlef/setup-elixir@v1
+        with:
+          elixir-version: '1.14'
+          otp-version: '25'
+
+      - name: Restore cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Compile
+        run: mix compile --warnings-as-errors
+        env:
+          MIX_ENV: test
+
+      - name: Run tests with coverage
+        run: mix coveralls.json
+        env:
+          MIX_ENV: test
+          DATABASE_URL: postgres://postgres:postgres@localhost/distributed_task_queue_test
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./cover/excoveralls.json
+          flags: unittests
+          fail_ci_if_error: false
+
+      - name: Run Credo (linting)
+        run: mix credo suggest --strict
+        env:
+          MIX_ENV: test
+
+      - name: Run Dialyzer (type checking)
+        run: mix dialyzer
+        env:
+          MIX_ENV: test

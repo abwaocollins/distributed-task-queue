@@ -9,7 +9,8 @@ defmodule DistributedTaskQueue.Application do
   def start(_type, _args) do
     children = [
       DistributedTaskQueueWeb.Telemetry,
-      {DNSCluster, query: Application.get_env(:distributed_task_queue, :dns_cluster_query) || :ignore},
+      {DNSCluster,
+       query: Application.get_env(:distributed_task_queue, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: DistributedTaskQueue.PubSub},
       # Start the Finch HTTP client for sending emails
       {Finch, name: DistributedTaskQueue.Finch},
