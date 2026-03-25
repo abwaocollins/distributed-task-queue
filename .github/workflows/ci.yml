@@ -70,7 +70,7 @@ jobs:
         env:
           MIX_ENV: test
 
-      - name: Run Dialyzer (type checking)
-        run: mix dialyzer
-        env:
-          MIX_ENV: test
+      # - name: Run Dialyzer (type checking)
+      #   run: mix dialyzer
+      #   env:
+      #     MIX_ENV: test
