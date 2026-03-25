@@ -64,7 +64,7 @@ defmodule DistributedTaskQueue.MixProject do
       {:dns_cluster, "~> 0.1.1"},
       {:bandit, "~> 1.5"},
       {:ecto_sql, "~> 3.13"},
-      {:postgrex, "~> 0.22.0"},
+      {:postgrex, "~> 0.21"},
 
       # Testing dependencies
       {:excoveralls, "~> 0.18.5", only: :test},
