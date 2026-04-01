@@ -5,6 +5,7 @@ defmodule DistributedTaskQueue.Job do
   schema "jobs" do
     field(:payload, :map)
     field(:worker_module, :string)
+    field(:worker_id, :integer)
     field(:queue_name, :string)
     field(:status, :string, default: "pending")
     field(:attempts, :integer, default: 0)
@@ -25,6 +26,7 @@ defmodule DistributedTaskQueue.Job do
     |> cast(attrs, [
       :payload,
       :worker_module,
+      :worker_id,
       :queue_name,
       :status,
       :attempts,

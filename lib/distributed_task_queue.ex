@@ -55,6 +55,14 @@ defmodule DistributedTaskQueue do
     Repo.all(query)
   end
 
+  # list all pending jobs assigned to a specific worker
+  def list_jobs_for_worker(worker_id) do
+    query = from j in Job,
+            where: j.worker_id == ^worker_id and j.status == "pending",
+            order_by: [asc: j.inserted_at]
+    Repo.all(query)
+  end
+
   # update job status
   def update_job_status(job_id, new_status) do
     job = Repo.get(Job, job_id)
