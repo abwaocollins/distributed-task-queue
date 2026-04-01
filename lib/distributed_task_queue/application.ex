@@ -14,6 +14,8 @@ defmodule DistributedTaskQueue.Application do
       {Phoenix.PubSub, name: DistributedTaskQueue.PubSub},
       # Start the Finch HTTP client for sending emails
       {Finch, name: DistributedTaskQueue.Finch},
+      {Registry, keys: :unique, name: DistributedTaskQueue.WorkerRegistry},
+      DistributedTaskQueue.WorkerSupervisor,
       # Start a worker by calling: DistributedTaskQueue.Worker.start_link(arg)
       # {DistributedTaskQueue.Worker, arg},
       # Start to serve requests, typically the last entry
