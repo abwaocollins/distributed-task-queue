@@ -2,6 +2,7 @@ defmodule DistributedTaskQueue.Worker do
   use GenServer
   alias DistributedTaskQueue.{Job, Repo}
   import Ecto.Query
+  @poll_interval 5_000
 
   def start_link(id) do
     GenServer.start_link(__MODULE__, %{id: id}, name: via(id))
@@ -29,8 +30,17 @@ defmodule DistributedTaskQueue.Worker do
     Repo.all(query)
   end
 
+  def handle_info(:poll, state) do
+    # Poll for new jobs assigned to this worker
+    get_jobs_for_worker(state.id)
+    Process.send_after(self(), :poll, @poll_interval)
+    {:noreply, state}
+  end
+
   def init(state) do
-    {:ok, state}
+      Process.send_after(self(), :poll, @poll_interval)
+      {:ok, state}
+
   end
 
 end
