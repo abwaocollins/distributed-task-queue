@@ -32,6 +32,10 @@ defmodule DistributedTaskQueue do
     Repo.all(Job)
   end
 
+  def get_job(job_id) do
+    Repo.get(Job, job_id)
+  end
+
   #list all queues
   def list_queues do
     Repo.all(Queue)
