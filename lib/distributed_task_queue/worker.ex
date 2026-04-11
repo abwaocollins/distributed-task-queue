@@ -4,6 +4,8 @@ defmodule DistributedTaskQueue.Worker do
   import Ecto.Query
   @poll_interval 5_000
 
+  @callback perform(payload :: map()) :: :ok | {:error, reason :: term()}
+
   def start_link(id) do
     GenServer.start_link(__MODULE__, %{id: id}, name: via(id))
   end
@@ -31,7 +33,6 @@ defmodule DistributedTaskQueue.Worker do
     # Execute the job
     {:noreply, state}
   end
-
 
 
   def handle_info(:poll, state) do
@@ -62,7 +63,7 @@ defmodule DistributedTaskQueue.Worker do
     module = String.to_existing_atom(job.worker_module)
 
     try do
-      apply(module, :perform, [job.args])
+      apply(module, :perform, [job.payload])
       DistributedTaskQueue.update_job_status(job.id, "completed")
     rescue
       e ->
