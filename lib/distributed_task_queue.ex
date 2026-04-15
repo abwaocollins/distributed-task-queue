@@ -7,7 +7,6 @@ defmodule DistributedTaskQueue do
   if it comes from the database, an external API or others.
   """
   alias DistributedTaskQueue.WorkerSupervisor
-  alias DistributedTaskQueue.Worker
   alias DistributedTaskQueue.Repo
   alias DistributedTaskQueue.{Job, Queue}
   import Ecto.Query
@@ -59,12 +58,41 @@ defmodule DistributedTaskQueue do
     Repo.all(query)
   end
 
-  # list all pending jobs assigned to a specific worker
+  # list all jobs processed by a specific worker (audit)
   def list_jobs_for_worker(worker_id) do
     query = from j in Job,
-            where: j.worker_id == ^worker_id and j.status == "pending",
+            where: j.worker_id == ^worker_id,
             order_by: [asc: j.inserted_at]
     Repo.all(query)
+  end
+
+  def get_queue(queue_name) do
+    Repo.get_by(Queue, name: queue_name)
+  end
+
+  # Atomically claim one available job in a queue for a worker
+  def claim_job(queue_name, worker_id) do
+    now = DateTime.utc_now()
+
+    subquery = from j in Job,
+      where: j.queue_name == ^queue_name
+        and j.status in ["pending", "retryable"]
+        and is_nil(j.worker_id)
+        and (is_nil(j.scheduled_at) or j.scheduled_at <= ^now),
+      order_by: [asc: j.inserted_at],
+      limit: 1,
+      select: j.id
+
+    {_count, jobs} = Repo.update_all(
+      from(j in Job, where: j.id in subquery(subquery)),
+      [set: [worker_id: worker_id, status: "started", started_at: now]],
+      returning: true
+    )
+
+    case jobs do
+      [job] -> {:ok, job}
+      [] -> {:error, :no_jobs}
+    end
   end
 
   # update job status
@@ -108,8 +136,10 @@ defmodule DistributedTaskQueue do
     end
   end
 
-  def start_worker(id) do
-    spec = {Worker, id}
-    DynamicSupervisor.start_child(WorkerSupervisor, spec)
+  def start_queue(queue_name) do
+    case get_queue(queue_name) do
+      nil -> {:error, :queue_not_found}
+      queue -> WorkerSupervisor.start_queue(queue_name, queue.max_concurrent_jobs)
+    end
   end
 end
