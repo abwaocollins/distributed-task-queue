@@ -84,14 +84,13 @@ defmodule DistributedTaskQueue do
       select: j.id
 
     {_count, jobs} = Repo.update_all(
-      from(j in Job, where: j.id in subquery(subquery)),
-      [set: [worker_id: worker_id, status: "started", started_at: now]],
-      returning: true
+      from(j in Job, where: j.id in subquery(subquery), select: j),
+      set: [worker_id: worker_id, status: "started", started_at: now]
     )
 
     case jobs do
       [job] -> {:ok, job}
-      [] -> {:error, :no_jobs}
+      _ -> {:error, :no_jobs}
     end
   end
 
@@ -103,7 +102,7 @@ defmodule DistributedTaskQueue do
         "started"   -> %{"started_at" => DateTime.utc_now()}
         "completed" -> %{"completed_at" => DateTime.utc_now()}
         "discarded" -> %{"discarded_at" => DateTime.utc_now()}
-        "retryable" -> %{"error_message" => "Job failed", "attempts" => job.attempts + 1, "next_retry_at" => DateTime.add(DateTime.utc_now(), 60, :second)}
+        "retryable" -> %{"error_message" => "Job failed", "attempts" => job.attempts + 1, "next_retry_at" => DateTime.add(DateTime.utc_now(), 60, :second), "worker_id" => nil}
         _ -> %{}
       end
       job
