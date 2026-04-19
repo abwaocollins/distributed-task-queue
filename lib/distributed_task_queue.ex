@@ -25,6 +25,18 @@ defmodule DistributedTaskQueue do
     |> Repo.insert()
   end
 
+  # add error message to job
+  def add_job_error(job_id, error_message) do
+    job = Repo.get(Job, job_id)
+    if job do
+      job
+      |> Job.changeset(%{"error_message" => error_message})
+      |> Repo.update()
+    else
+      {:error, "Job not found"}
+    end
+  end
+
   #list all jobs
 
   def list_jobs do
