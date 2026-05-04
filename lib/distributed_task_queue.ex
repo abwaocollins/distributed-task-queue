@@ -88,9 +88,12 @@ defmodule DistributedTaskQueue do
 
     subquery = from j in Job,
       where: j.queue_name == ^queue_name
-        and j.status in ["pending", "retryable"]
         and is_nil(j.worker_id)
-        and (is_nil(j.scheduled_at) or j.scheduled_at <= ^now),
+        and (
+          (j.status == "pending" and (is_nil(j.scheduled_at) or j.scheduled_at <= ^now))
+          or
+          (j.status == "retryable" and (is_nil(j.next_retry_at) or j.next_retry_at <= ^now))
+        ),
       order_by: [asc: j.inserted_at],
       limit: 1,
       select: j.id
