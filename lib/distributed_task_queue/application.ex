@@ -9,18 +9,14 @@ defmodule DistributedTaskQueue.Application do
   def start(_type, _args) do
     children = [
       DistributedTaskQueueWeb.Telemetry,
+      DistributedTaskQueue.Repo,
       {DNSCluster,
        query: Application.get_env(:distributed_task_queue, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: DistributedTaskQueue.PubSub},
-      # Start the Finch HTTP client for sending emails
       {Finch, name: DistributedTaskQueue.Finch},
       {Registry, keys: :unique, name: DistributedTaskQueue.WorkerRegistry},
       DistributedTaskQueue.WorkerSupervisor,
-      # Start a worker by calling: DistributedTaskQueue.Worker.start_link(arg)
-      # {DistributedTaskQueue.Worker, arg},
-      # Start to serve requests, typically the last entry
-      DistributedTaskQueueWeb.Endpoint,
-      DistributedTaskQueue.Repo
+      DistributedTaskQueueWeb.Endpoint
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html

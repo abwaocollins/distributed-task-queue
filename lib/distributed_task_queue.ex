@@ -1,31 +1,23 @@
 defmodule DistributedTaskQueue do
-  @moduledoc """
-  DistributedTaskQueue keeps the contexts that define your domain
-  and business logic.
+  @moduledoc false
 
-  Contexts are also responsible for managing your data, regardless
-  if it comes from the database, an external API or others.
-  """
   alias DistributedTaskQueue.WorkerSupervisor
   alias DistributedTaskQueue.Repo
   alias DistributedTaskQueue.{Job, Queue}
   import Ecto.Query
 
-  #Add a job to the database
   def add_job(queue_name, job_attrs) do
     %Job{}
     |> Job.changeset(Map.merge(job_attrs, %{"queue_name" => queue_name}))
     |> Repo.insert()
   end
 
-  #Add a queue to the database
   def add_queue(queue_name) do
     %Queue{}
     |> Queue.changeset(%{"name" => queue_name})
     |> Repo.insert()
   end
 
-  # add error message to job
   def add_job_error(job_id, error_message) do
     job = Repo.get(Job, job_id)
     if job do
@@ -37,71 +29,50 @@ defmodule DistributedTaskQueue do
     end
   end
 
-  #list all jobs
+  def list_jobs, do: Repo.all(Job)
 
-  def list_jobs do
-    Repo.all(Job)
-  end
+  def get_job(job_id), do: Repo.get(Job, job_id)
 
-  def get_job(job_id) do
-    Repo.get(Job, job_id)
-  end
+  def list_queues, do: Repo.all(Queue)
 
-  #list all queues
-  def list_queues do
-    Repo.all(Queue)
-  end
-
-  #list all pending jobs
   def list_pending_jobs do
-    query = from j in Job, where: j.status == "pending"
-    Repo.all(query)
+    Repo.all(from j in Job, where: j.status == "pending")
   end
 
-  # list all jobs that are scheduled to run in the future
   def list_scheduled_jobs do
-    query = from j in Job, where: j.scheduled_at > ^DateTime.utc_now()
-    Repo.all(query)
+    Repo.all(from j in Job, where: j.scheduled_at > ^DateTime.utc_now())
   end
 
-  #list all jobs in a specific queue
   def list_jobs_in_queue(queue_name) do
-    query = from j in Job, where: j.queue_name == ^queue_name
-    Repo.all(query)
+    Repo.all(from j in Job, where: j.queue_name == ^queue_name)
   end
 
-  # list all jobs processed by a specific worker (audit)
   def list_jobs_for_worker(worker_id) do
-    query = from j in Job,
-            where: j.worker_id == ^worker_id,
-            order_by: [asc: j.inserted_at]
-    Repo.all(query)
+    Repo.all(from j in Job, where: j.worker_id == ^worker_id, order_by: [asc: j.inserted_at])
   end
 
-  def get_queue(queue_name) do
-    Repo.get_by(Queue, name: queue_name)
-  end
+  def get_queue(queue_name), do: Repo.get_by(Queue, name: queue_name)
 
-  # Atomically claim one available job in a queue for a worker
+  # Atomically claim one available job for a worker using a subquery update to avoid races.
   def claim_job(queue_name, worker_id) do
     now = DateTime.utc_now()
 
-    subquery = from j in Job,
-      where: j.queue_name == ^queue_name
-        and is_nil(j.worker_id)
-        and (
-          (j.status == "pending" and (is_nil(j.scheduled_at) or j.scheduled_at <= ^now))
-          or
-          (j.status == "retryable" and (is_nil(j.next_retry_at) or j.next_retry_at <= ^now))
-        ),
-      order_by: [asc: j.inserted_at],
-      limit: 1,
-      select: j.id
+    subquery =
+      from j in Job,
+        where:
+          j.queue_name == ^queue_name and is_nil(j.worker_id) and
+            ((j.status == "pending" and (is_nil(j.scheduled_at) or j.scheduled_at <= ^now)) or
+               (j.status == "retryable" and
+                  (is_nil(j.next_retry_at) or j.next_retry_at <= ^now))),
+        order_by: [asc: j.inserted_at],
+        limit: 1,
+        select: j.id
 
-    {_count, jobs} = Repo.update_all(
-      from(j in Job, where: j.id in subquery(subquery), select: j),
-      set: [worker_id: worker_id, status: "started", started_at: now]
-    )
+    {_count, jobs} =
+      Repo.update_all(
+        from(j in Job, where: j.id in subquery(subquery), select: j),
+        set: [worker_id: worker_id, status: "started", started_at: now]
+      )
 
     case jobs do
       [job] -> {:ok, job}
@@ -109,17 +80,33 @@ defmodule DistributedTaskQueue do
     end
   end
 
-  # update job status
-  def update_job_status(job_id, new_status) do
+  def update_job_status(job_id, new_status, error_message \\ nil) do
     job = Repo.get(Job, job_id)
+
     if job do
-      extra = case new_status do
-        "started"   -> %{"started_at" => DateTime.utc_now()}
-        "completed" -> %{"completed_at" => DateTime.utc_now()}
-        "discarded" -> %{"discarded_at" => DateTime.utc_now()}
-        "retryable" -> %{"error_message" => "Job failed", "attempts" => job.attempts + 1, "next_retry_at" => DateTime.add(DateTime.utc_now(), 60, :second), "worker_id" => nil}
-        _ -> %{}
-      end
+      extra =
+        case new_status do
+          "started" ->
+            %{"started_at" => DateTime.utc_now()}
+
+          "completed" ->
+            %{"completed_at" => DateTime.utc_now()}
+
+          "discarded" ->
+            %{"discarded_at" => DateTime.utc_now(), "error_message" => error_message}
+
+          "retryable" ->
+            %{
+              "error_message" => error_message || "Job failed",
+              "attempts" => job.attempts + 1,
+              "next_retry_at" => DateTime.add(DateTime.utc_now(), 60, :second),
+              "worker_id" => nil
+            }
+
+          _ ->
+            %{}
+        end
+
       job
       |> Job.changeset(Map.merge(extra, %{"status" => new_status}))
       |> Repo.update()
@@ -128,9 +115,29 @@ defmodule DistributedTaskQueue do
     end
   end
 
-  #soft delete a job
+  # Returns milliseconds until the earliest retryable job in the queue becomes claimable,
+  # or nil if none exist. Used by QueueManager to avoid shutting down prematurely.
+  def next_retryable_delay(queue_name) do
+    now = DateTime.utc_now()
+
+    next =
+      Repo.one(
+        from j in Job,
+          where: j.queue_name == ^queue_name and j.status == "retryable" and not is_nil(j.next_retry_at),
+          order_by: [asc: j.next_retry_at],
+          limit: 1,
+          select: j.next_retry_at
+      )
+
+    case next do
+      nil -> nil
+      next_retry_at -> max(DateTime.diff(next_retry_at, now, :millisecond), 0)
+    end
+  end
+
   def delete_job(job_id) do
     job = Repo.get(Job, job_id)
+
     if job do
       job
       |> Job.changeset(%{"deleted_at" => DateTime.utc_now(), "status" => "deleted"})
@@ -140,9 +147,9 @@ defmodule DistributedTaskQueue do
     end
   end
 
-  #permanently delete a job
   def hard_delete_job(job_id) do
     job = Repo.get(Job, job_id)
+
     if job do
       Repo.delete(job)
     else
@@ -154,6 +161,18 @@ defmodule DistributedTaskQueue do
     case get_queue(queue_name) do
       nil -> {:error, :queue_not_found}
       queue -> WorkerSupervisor.start_queue(queue_name, queue.max_concurrent_jobs)
+    end
+  end
+
+  def stop_queue(queue_name) do
+    pending_count =
+      from(j in Job, where: j.queue_name == ^queue_name and j.status in ["pending", "retryable"])
+      |> Repo.aggregate(:count)
+
+    if pending_count > 0 do
+      {:error, {:pending_jobs, pending_count}}
+    else
+      WorkerSupervisor.stop_queue(queue_name)
     end
   end
 end

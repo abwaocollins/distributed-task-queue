@@ -13,4 +13,11 @@ defmodule DistributedTaskQueue.WorkerSupervisor do
   def start_queue(queue_name, concurrency) do
     DynamicSupervisor.start_child(__MODULE__, {QueueManager, {queue_name, concurrency}})
   end
+
+  def stop_queue(queue_name) do
+    case Registry.lookup(DistributedTaskQueue.WorkerRegistry, queue_name) do
+      [{pid, _}] -> DynamicSupervisor.terminate_child(__MODULE__, pid)
+      [] -> {:error, :not_running}
+    end
+  end
 end
