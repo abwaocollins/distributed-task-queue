@@ -47,8 +47,12 @@ defmodule DistributedTaskQueue do
     Repo.all(from j in Job, where: j.queue_name == ^queue_name)
   end
 
-  def list_jobs_for_worker(worker_id) do
-    Repo.all(from j in Job, where: j.worker_id == ^worker_id, order_by: [asc: j.inserted_at])
+  def list_jobs_for_worker(queue_name, slot) do
+    Repo.all(
+      from j in Job,
+        where: j.queue_name == ^queue_name and j.worker_id == ^slot,
+        order_by: [asc: j.inserted_at]
+    )
   end
 
   def get_queue(queue_name), do: Repo.get_by(Queue, name: queue_name)
@@ -68,10 +72,12 @@ defmodule DistributedTaskQueue do
         limit: 1,
         select: j.id
 
+    attempted_by = "#{Node.self()}:#{queue_name}"
+
     {_count, jobs} =
       Repo.update_all(
         from(j in Job, where: j.id in subquery(subquery), select: j),
-        set: [worker_id: worker_id, status: "started", started_at: now]
+        set: [worker_id: worker_id, status: "started", started_at: now, attempted_by: attempted_by]
       )
 
     case jobs do
