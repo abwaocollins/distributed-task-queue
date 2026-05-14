@@ -10,8 +10,9 @@ defmodule DistributedTaskQueue.Factory do
   end
 
   def job_factory do
+    queue = insert(:queue)
     %DistributedTaskQueue.Job{
-      queue_name: sequence(:queue_name, &"queue-#{&1}"),
+      queue_name: queue.name,
       worker_module: "DistributedTaskQueue.EmailWorker",
       payload: %{"to" => "test@example.com"},
       status: "pending",
