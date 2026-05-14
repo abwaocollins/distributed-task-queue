@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(mix test *)",
+      "Bash(MIX_ENV=test mix ecto.create)",
+      "Bash(MIX_ENV=test mix ecto.migrate)",
+      "mcp__plugin_context-mode_context-mode__ctx_batch_execute",
+      "Bash(mix compile *)",
+      "Bash(mix *)"
+    ]
+  }
+}
