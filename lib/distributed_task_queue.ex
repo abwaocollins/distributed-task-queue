@@ -175,14 +175,20 @@ defmodule DistributedTaskQueue do
   end
 
   def stop_queue(queue_name) do
-    pending_count =
-      from(j in Job, where: j.queue_name == ^queue_name and j.status in ["pending", "retryable"])
-      |> Repo.aggregate(:count)
+    case get_queue(queue_name) do
+      nil ->
+        {:error, :queue_not_found}
 
-    if pending_count > 0 do
-      {:error, {:pending_jobs, pending_count}}
-    else
-      WorkerSupervisor.stop_queue(queue_name)
+      _queue ->
+        pending_count =
+          from(j in Job, where: j.queue_name == ^queue_name and j.status in ["pending", "retryable"])
+          |> Repo.aggregate(:count)
+
+        if pending_count > 0 do
+          {:error, {:pending_jobs, pending_count}}
+        else
+          WorkerSupervisor.stop_queue(queue_name)
+        end
     end
   end
 end

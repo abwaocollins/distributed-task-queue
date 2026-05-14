@@ -67,11 +67,17 @@ defmodule DistributedTaskQueueWeb.QueueControllerTest do
     end
 
     test "returns 409 when queue has pending jobs", %{conn: conn} do
-      insert(:queue, name: "busy", max_concurrent_jobs: 1)
+      insert(:queue, name: "busy", max_concurrent_jobs: 0)
       insert(:job, queue_name: "busy", status: "pending")
       post(conn, ~p"/api/queues/busy/start")
       conn = post(conn, ~p"/api/queues/busy/stop")
       assert %{"error" => _} = json_response(conn, 409)
+    end
+
+    test "returns 404 for a queue that exists but was never started", %{conn: conn} do
+      insert(:queue, name: "not-started")
+      conn = post(conn, ~p"/api/queues/not-started/stop")
+      assert %{"error" => _} = json_response(conn, 404)
     end
 
     test "returns 404 for unknown queue", %{conn: conn} do
