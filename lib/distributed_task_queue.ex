@@ -43,6 +43,24 @@ defmodule DistributedTaskQueue do
     Repo.all(from j in Job, where: j.status == "pending")
   end
 
+  def list_jobs_filtered(filters \\ %{}) do
+    query = from j in Job, where: is_nil(j.deleted_at)
+
+    query =
+      case Map.get(filters, "queue") || Map.get(filters, :queue) do
+        nil -> query
+        queue -> from j in query, where: j.queue_name == ^queue
+      end
+
+    query =
+      case Map.get(filters, "status") || Map.get(filters, :status) do
+        nil -> query
+        status -> from j in query, where: j.status == ^status
+      end
+
+    Repo.all(from j in query, order_by: [asc: j.inserted_at])
+  end
+
   def list_scheduled_jobs do
     Repo.all(from j in Job, where: j.scheduled_at > ^DateTime.utc_now())
   end
@@ -148,12 +166,17 @@ defmodule DistributedTaskQueue do
   def delete_job(job_id) do
     job = Repo.get(Job, job_id)
 
-    if job do
-      job
-      |> Job.changeset(%{"deleted_at" => DateTime.utc_now(), "status" => "deleted"})
-      |> Repo.update()
-    else
-      {:error, "Job not found"}
+    cond do
+      is_nil(job) ->
+        {:error, :not_found}
+
+      job.status == "started" ->
+        {:error, :job_running}
+
+      true ->
+        job
+        |> Job.changeset(%{"deleted_at" => DateTime.utc_now(), "status" => "deleted"})
+        |> Repo.update()
     end
   end
 
