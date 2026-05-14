@@ -20,10 +20,15 @@ defmodule DistributedTaskQueueWeb.Router do
     get "/", PageController, :home
   end
 
-  # Other scopes may use custom stacks.
-  # scope "/api", DistributedTaskQueueWeb do
-  #   pipe_through :api
-  # end
+  scope "/api", DistributedTaskQueueWeb do
+    pipe_through :api
+
+    resources "/queues", QueueController, only: [:index, :create]
+    post "/queues/:name/start", QueueController, :start
+    post "/queues/:name/stop",  QueueController, :stop
+
+    resources "/jobs", JobController, only: [:index, :show, :create, :delete]
+  end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development
   if Application.compile_env(:distributed_task_queue, :dev_routes) do
