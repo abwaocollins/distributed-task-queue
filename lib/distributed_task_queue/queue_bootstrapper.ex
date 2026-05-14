@@ -4,7 +4,16 @@ defmodule DistributedTaskQueue.QueueBootstrapper do
 
   def start_link(_opts), do: GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
 
-  def boot do
+  def init(:ok) do
+    {:ok, :not_booted, {:continue, :boot}}
+  end
+
+  def handle_continue(:boot, state) do
+    do_boot()
+    {:stop, :normal, state}
+  end
+
+  defp do_boot do
     DistributedTaskQueue.list_queues()
     |> Enum.each(fn queue ->
       case DistributedTaskQueue.WorkerSupervisor.start_queue(queue.name, queue.max_concurrent_jobs) do
@@ -16,10 +25,5 @@ defmodule DistributedTaskQueue.QueueBootstrapper do
           Logger.warning("[QueueBootstrapper] failed to start queue #{queue.name}: #{inspect(reason)}")
       end
     end)
-    {:ok, :booted}
-  end
-
-  def init(:ok) do
-    boot()
   end
 end
