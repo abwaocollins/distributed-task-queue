@@ -12,10 +12,14 @@ defmodule DistributedTaskQueue do
     |> Repo.insert()
   end
 
-  def add_queue(queue_name) do
+  def add_queue(attrs) when is_map(attrs) do
     %Queue{}
-    |> Queue.changeset(%{"name" => queue_name})
+    |> Queue.changeset(attrs)
     |> Repo.insert()
+  end
+
+  def add_queue(queue_name) when is_binary(queue_name) do
+    add_queue(%{"name" => queue_name})
   end
 
   def add_job_error(job_id, error_message) do
