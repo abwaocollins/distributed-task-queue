@@ -19,19 +19,17 @@ defmodule DistributedTaskQueueWeb.ConnCase do
 
   using do
     quote do
-      # The default endpoint for testing
       @endpoint DistributedTaskQueueWeb.Endpoint
-
       use DistributedTaskQueueWeb, :verified_routes
-
-      # Import conveniences for testing with connections
       import Plug.Conn
       import Phoenix.ConnTest
       import DistributedTaskQueueWeb.ConnCase
+      import DistributedTaskQueue.Factory
     end
   end
 
-  setup _tags do
+  setup tags do
+    DistributedTaskQueue.DataCase.setup_sandbox(tags)
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
 end
