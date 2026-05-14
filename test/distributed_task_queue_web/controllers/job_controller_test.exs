@@ -16,6 +16,7 @@ defmodule DistributedTaskQueueWeb.JobControllerTest do
       insert(:job)
       conn = get(conn, ~p"/api/jobs?queue=target")
       assert %{"data" => jobs} = json_response(conn, 200)
+      assert length(jobs) >= 1
       assert Enum.all?(jobs, fn j -> j["queue_name"] == "target" end)
     end
 
@@ -97,6 +98,11 @@ defmodule DistributedTaskQueueWeb.JobControllerTest do
 
     test "returns 422 when queue_name is missing", %{conn: conn} do
       conn = post(conn, ~p"/api/jobs", %{payload: %{}, worker_module: "Foo"})
+      assert %{"error" => _} = json_response(conn, 422)
+    end
+
+    test "returns 422 when worker_module is missing", %{conn: conn} do
+      conn = post(conn, ~p"/api/jobs", %{queue_name: "emails", payload: %{}})
       assert %{"error" => _} = json_response(conn, 422)
     end
   end

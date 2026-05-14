@@ -49,13 +49,19 @@ defmodule DistributedTaskQueueWeb.JobController do
       attempts: job.attempts,
       max_attempts: job.max_attempts,
       error_message: job.error_message,
-      scheduled_at: job.scheduled_at,
-      started_at: job.started_at,
-      completed_at: job.completed_at,
+      scheduled_at: format_dt(job.scheduled_at),
+      started_at: format_dt(job.started_at),
+      completed_at: format_dt(job.completed_at),
       attempted_by: job.attempted_by,
-      inserted_at: job.inserted_at
+      inserted_at: format_naive_dt(job.inserted_at)
     }
   end
+
+  defp format_dt(nil), do: nil
+  defp format_dt(dt), do: DateTime.to_iso8601(dt)
+
+  defp format_naive_dt(nil), do: nil
+  defp format_naive_dt(dt), do: NaiveDateTime.to_iso8601(dt)
 
   defp format_errors(changeset) do
     Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->

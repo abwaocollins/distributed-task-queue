@@ -41,6 +41,6 @@ defmodule DistributedTaskQueue.Job do
       :deleted_at,
       :attempted_by
     ])
-    |> validate_required([:payload, :queue_name])
+    |> validate_required([:payload, :queue_name, :worker_module])
   end
 end

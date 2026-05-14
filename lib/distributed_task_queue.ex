@@ -35,7 +35,9 @@ defmodule DistributedTaskQueue do
 
   def list_jobs, do: Repo.all(Job)
 
-  def get_job(job_id), do: Repo.get(Job, job_id)
+  def get_job(job_id) do
+    Repo.one(from j in Job, where: j.id == ^job_id and is_nil(j.deleted_at))
+  end
 
   def list_queues, do: Repo.all(Queue)
 
