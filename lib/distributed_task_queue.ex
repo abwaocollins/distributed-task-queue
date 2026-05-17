@@ -129,7 +129,7 @@ defmodule DistributedTaskQueue do
             %{
               "error_message" => error_message || "Job failed",
               "attempts" => job.attempts + 1,
-              "next_retry_at" => DateTime.add(DateTime.utc_now(), 60, :second),
+              "next_retry_at" => DateTime.add(DateTime.utc_now(), backoff_seconds(job.attempts), :second),
               "worker_id" => nil
             }
 
@@ -144,6 +144,10 @@ defmodule DistributedTaskQueue do
       {:error, "Job not found"}
     end
   end
+
+  # Exponential backoff: 15 * 2^attempts, capped at 1 hour.
+  # attempts=0 → 15s, 1 → 30s, 2 → 60s, 3 → 120s, …, 8+ → 3600s
+  defp backoff_seconds(attempts), do: min(15 * Integer.pow(2, attempts), 3_600)
 
   # Returns milliseconds until the earliest retryable job in the queue becomes claimable,
   # or nil if none exist. Used by QueueManager to avoid shutting down prematurely.
