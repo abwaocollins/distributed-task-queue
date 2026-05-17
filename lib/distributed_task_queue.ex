@@ -63,7 +63,7 @@ defmodule DistributedTaskQueue do
     Repo.all(from j in query, order_by: [asc: j.inserted_at])
   end
 
-  def list_scheduled_jobs do
+  def list_upcoming_jobs do
     Repo.all(from j in Job, where: j.scheduled_at > ^DateTime.utc_now())
   end
 
