@@ -3,7 +3,7 @@ defmodule DistributedTaskQueue do
 
   alias DistributedTaskQueue.WorkerSupervisor
   alias DistributedTaskQueue.Repo
-  alias DistributedTaskQueue.{Job, Queue}
+  alias DistributedTaskQueue.{Job, Queue, CronJob}
   import Ecto.Query
 
   def add_job(queue_name, job_attrs) do
@@ -218,6 +218,52 @@ defmodule DistributedTaskQueue do
         else
           WorkerSupervisor.stop_queue(queue_name)
         end
+    end
+  end
+
+  def create_cron_job(attrs) do
+    %CronJob{}
+    |> CronJob.changeset(attrs)
+    |> put_next_run_at()
+    |> Repo.insert()
+  end
+
+  def list_cron_jobs, do: Repo.all(CronJob)
+
+  def get_cron_job(id), do: Repo.get(CronJob, id)
+
+  def update_cron_job(cron_job, attrs) do
+    cron_job
+    |> CronJob.changeset(attrs)
+    |> put_next_run_at_if_schedule_changed()
+    |> Repo.update()
+  end
+
+  def delete_cron_job(cron_job), do: Repo.delete(cron_job)
+
+  def enable_cron_job(cron_job) do
+    cron_job |> CronJob.changeset(%{enabled: true}) |> Repo.update()
+  end
+
+  def disable_cron_job(cron_job) do
+    cron_job |> CronJob.changeset(%{enabled: false}) |> Repo.update()
+  end
+
+  defp put_next_run_at(changeset) do
+    if changeset.valid? do
+      next_run_at = changeset |> Ecto.Changeset.apply_changes() |> CronJob.compute_next_run_at()
+      Ecto.Changeset.put_change(changeset, :next_run_at, next_run_at)
+    else
+      changeset
+    end
+  end
+
+  defp put_next_run_at_if_schedule_changed(changeset) do
+    if Ecto.Changeset.changed?(changeset, :cron_expression) or
+         Ecto.Changeset.changed?(changeset, :interval_seconds) do
+      put_next_run_at(changeset)
+    else
+      changeset
     end
   end
 end

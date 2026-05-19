@@ -108,4 +108,99 @@ defmodule DistributedTaskQueue.CronJobTest do
       assert Ecto.Changeset.get_change(cs, :cron_job_id) == 42
     end
   end
+
+  describe "create_cron_job/1" do
+    test "inserts record and sets next_run_at for interval schedule" do
+      attrs = %{
+        name: "interval-cron",
+        worker_module: "DistributedTaskQueue.EmailWorker",
+        queue_name: "emails",
+        payload: %{},
+        interval_seconds: 60
+      }
+      assert {:ok, cron} = DistributedTaskQueue.create_cron_job(attrs)
+      assert cron.name == "interval-cron"
+      assert not is_nil(cron.next_run_at)
+      assert DateTime.diff(cron.next_run_at, DateTime.utc_now(), :second) in 58..62
+    end
+
+    test "inserts record and sets next_run_at for cron expression" do
+      attrs = %{
+        name: "cron-expr-job",
+        worker_module: "DistributedTaskQueue.EmailWorker",
+        queue_name: "emails",
+        payload: %{},
+        cron_expression: "* * * * *"
+      }
+      assert {:ok, cron} = DistributedTaskQueue.create_cron_job(attrs)
+      assert not is_nil(cron.next_run_at)
+      assert DateTime.compare(cron.next_run_at, DateTime.utc_now()) == :gt
+    end
+
+    test "returns error changeset on invalid attrs" do
+      assert {:error, cs} = DistributedTaskQueue.create_cron_job(%{})
+      refute cs.valid?
+    end
+  end
+
+  describe "list_cron_jobs/0" do
+    test "returns all cron jobs" do
+      insert(:cron_job)
+      insert(:cron_job)
+      assert length(DistributedTaskQueue.list_cron_jobs()) >= 2
+    end
+  end
+
+  describe "get_cron_job/1" do
+    test "returns cron job by id" do
+      cron = insert(:cron_job)
+      assert DistributedTaskQueue.get_cron_job(cron.id).id == cron.id
+    end
+
+    test "returns nil for unknown id" do
+      assert is_nil(DistributedTaskQueue.get_cron_job(0))
+    end
+  end
+
+  describe "update_cron_job/2" do
+    test "updates allowed fields" do
+      cron = insert(:cron_job)
+      assert {:ok, updated} = DistributedTaskQueue.update_cron_job(cron, %{description: "new desc"})
+      assert updated.description == "new desc"
+    end
+
+    test "recomputes next_run_at when interval_seconds changes" do
+      cron = insert(:cron_job, interval_seconds: 300)
+      assert {:ok, updated} = DistributedTaskQueue.update_cron_job(cron, %{interval_seconds: 600})
+      assert DateTime.diff(updated.next_run_at, DateTime.utc_now(), :second) in 598..602
+    end
+
+    test "returns error on invalid attrs" do
+      cron = insert(:cron_job)
+      assert {:error, cs} = DistributedTaskQueue.update_cron_job(cron, %{interval_seconds: -1})
+      refute cs.valid?
+    end
+  end
+
+  describe "delete_cron_job/1" do
+    test "deletes the record" do
+      cron = insert(:cron_job)
+      assert {:ok, _} = DistributedTaskQueue.delete_cron_job(cron)
+      assert is_nil(DistributedTaskQueue.get_cron_job(cron.id))
+    end
+  end
+
+  describe "enable_cron_job/1 and disable_cron_job/1" do
+    test "disable sets enabled to false" do
+      cron = insert(:cron_job, enabled: true)
+      assert {:ok, updated} = DistributedTaskQueue.disable_cron_job(cron)
+      refute updated.enabled
+    end
+
+    test "enable sets enabled to true" do
+      cron = insert(:cron_job, enabled: false)
+      assert {:ok, updated} = DistributedTaskQueue.enable_cron_job(cron)
+      assert updated.enabled
+    end
+  end
 end
