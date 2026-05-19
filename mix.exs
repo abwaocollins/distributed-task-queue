@@ -65,6 +65,7 @@ defmodule DistributedTaskQueue.MixProject do
       {:bandit, "~> 1.5"},
       {:ecto_sql, "~> 3.13"},
       {:postgrex, "~> 0.21"},
+      {:crontab, "~> 1.1"},
 
       # Testing dependencies
       {:excoveralls, "~> 0.18.5", only: :test},
