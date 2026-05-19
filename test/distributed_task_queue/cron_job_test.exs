@@ -95,4 +95,17 @@ defmodule DistributedTaskQueue.CronJobTest do
       assert DateTime.compare(result, DateTime.utc_now()) == :gt
     end
   end
+
+  describe "Job changeset accepts cron_job_id" do
+    test "cron_job_id is castable" do
+      attrs = %{
+        queue_name: "emails",
+        worker_module: "DistributedTaskQueue.EmailWorker",
+        payload: %{},
+        cron_job_id: 42
+      }
+      cs = DistributedTaskQueue.Job.changeset(%DistributedTaskQueue.Job{}, attrs)
+      assert Ecto.Changeset.get_change(cs, :cron_job_id) == 42
+    end
+  end
 end

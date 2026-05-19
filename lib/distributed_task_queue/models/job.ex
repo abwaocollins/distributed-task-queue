@@ -18,6 +18,7 @@ defmodule DistributedTaskQueue.Job do
     field(:discarded_at, :utc_datetime)
     field(:deleted_at, :utc_datetime)
     field(:attempted_by, :string)
+    field(:cron_job_id, :integer)
 
     timestamps()
   end
@@ -39,7 +40,8 @@ defmodule DistributedTaskQueue.Job do
       :completed_at,
       :discarded_at,
       :deleted_at,
-      :attempted_by
+      :attempted_by,
+      :cron_job_id
     ])
     |> validate_required([:payload, :queue_name, :worker_module])
   end
