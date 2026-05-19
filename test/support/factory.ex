@@ -19,4 +19,18 @@ defmodule DistributedTaskQueue.Factory do
       max_attempts: 3
     }
   end
+
+  def cron_job_factory do
+    queue = insert(:queue)
+    %DistributedTaskQueue.CronJob{
+      name: sequence(:name, &"cron-job-#{&1}"),
+      worker_module: "DistributedTaskQueue.EmailWorker",
+      queue_name: queue.name,
+      payload: %{"to" => "test@example.com"},
+      interval_seconds: 300,
+      overlap: false,
+      enabled: true,
+      next_run_at: DateTime.add(DateTime.utc_now(), 300, :second) |> DateTime.truncate(:second)
+    }
+  end
 end
