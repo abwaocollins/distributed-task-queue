@@ -99,7 +99,12 @@ defmodule DistributedTaskQueue.CronSchedulerTest do
 
   describe "start_link/1" do
     test "starts without error" do
-      assert {:ok, _pid} = start_supervised(CronScheduler)
+      # CronScheduler is started in the application supervision tree,
+      # so we expect it to be already running
+      case start_supervised(CronScheduler) do
+        {:ok, _pid} -> assert true
+        {:error, {:already_started, _pid}} -> assert true
+      end
     end
   end
 end

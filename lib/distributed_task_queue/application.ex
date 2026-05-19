@@ -17,6 +17,7 @@ defmodule DistributedTaskQueue.Application do
       {Registry, keys: :unique, name: DistributedTaskQueue.WorkerRegistry},
       DistributedTaskQueue.WorkerSupervisor,
       DistributedTaskQueue.QueueBootstrapper,
+      DistributedTaskQueue.CronScheduler,
       DistributedTaskQueueWeb.Endpoint
     ]
 
