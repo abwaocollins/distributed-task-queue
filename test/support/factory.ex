@@ -16,7 +16,8 @@ defmodule DistributedTaskQueue.Factory do
       worker_module: "DistributedTaskQueue.EmailWorker",
       payload: %{"to" => "test@example.com"},
       status: "pending",
-      max_attempts: 3
+      max_attempts: 3,
+      cron_job_id: nil
     }
   end
 
