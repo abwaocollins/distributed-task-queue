@@ -36,22 +36,26 @@ defmodule DistributedTaskQueue.CronScheduler do
 
   defp maybe_fire(cron) do
     if cron.overlap or no_active_jobs?(cron.id) do
-      {:ok, _job} =
-        DistributedTaskQueue.add_job(cron.queue_name, %{
-          "worker_module" => cron.worker_module,
-          "payload" => cron.payload,
-          "max_attempts" => cron.max_attempts,
-          "cron_job_id" => cron.id
-        })
+      case DistributedTaskQueue.add_job(cron.queue_name, %{
+             "worker_module" => cron.worker_module,
+             "payload" => cron.payload,
+             "max_attempts" => cron.max_attempts,
+             "cron_job_id" => cron.id
+           }) do
+        {:ok, _job} ->
+          next_run_at = CronJob.compute_next_run_at(cron)
 
-      next_run_at = CronJob.compute_next_run_at(cron)
+          cron
+          |> CronJob.changeset(%{
+            last_run_at: DateTime.utc_now() |> DateTime.truncate(:second),
+            next_run_at: next_run_at
+          })
+          |> Repo.update!()
 
-      cron
-      |> CronJob.changeset(%{
-        last_run_at: DateTime.utc_now() |> DateTime.truncate(:second),
-        next_run_at: next_run_at
-      })
-      |> Repo.update!()
+        {:error, reason} ->
+          require Logger
+          Logger.error("CronScheduler: failed to enqueue job for cron #{cron.id}: #{inspect(reason)}")
+      end
     end
   end
 
@@ -77,7 +81,7 @@ defmodule DistributedTaskQueue.CronScheduler do
              select: c.next_run_at
          ) do
       nil -> @fallback_interval_ms
-      next_run_at -> max(DateTime.diff(next_run_at, now, :millisecond), 0)
+      next_run_at -> max(DateTime.diff(next_run_at, now, :millisecond), @fallback_interval_ms)
     end
   end
 
