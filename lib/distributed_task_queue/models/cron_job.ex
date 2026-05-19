@@ -44,6 +44,9 @@ defmodule DistributedTaskQueue.CronJob do
     DateTime.from_naive!(naive_next, "Etc/UTC")
   end
 
+  def compute_next_run_at(%__MODULE__{}),
+    do: raise(ArgumentError, "CronJob must have cron_expression or interval_seconds set")
+
   defp validate_schedule(changeset) do
     cron_expr = get_field(changeset, :cron_expression)
     interval = get_field(changeset, :interval_seconds)
@@ -59,13 +62,17 @@ defmodule DistributedTaskQueue.CronJob do
   end
 
   defp validate_cron_expression(changeset) do
-    case get_field(changeset, :cron_expression) do
-      nil -> changeset
-      expr ->
-        case Crontab.CronExpression.Parser.parse(expr) do
-          {:ok, _} -> changeset
-          {:error, _} -> add_error(changeset, :cron_expression, "is not a valid cron expression")
-        end
+    if changeset.valid? do
+      case get_field(changeset, :cron_expression) do
+        nil -> changeset
+        expr ->
+          case Crontab.CronExpression.Parser.parse(expr) do
+            {:ok, _} -> changeset
+            {:error, _} -> add_error(changeset, :cron_expression, "is not a valid cron expression")
+          end
+      end
+    else
+      changeset
     end
   end
 end
