@@ -8,7 +8,13 @@
       "Bash(MIX_ENV=test mix ecto.migrate)",
       "mcp__plugin_context-mode_context-mode__ctx_batch_execute",
       "Bash(mix compile *)",
-      "Bash(mix *)"
+      "Bash(mix *)",
+      "Skill(superpowers:writing-plans)",
+      "Skill(superpowers:subagent-driven-development)",
+      "Skill(superpowers:requesting-code-review)",
+      "Bash(psql *)",
+      "Bash(grep -i \"\\\\.exs$\")",
+      "Skill(superpowers:receiving-code-review)"
     ]
   }
 }
