@@ -3,6 +3,7 @@ defmodule DistributedTaskQueue.CronScheduler do
 
   alias DistributedTaskQueue.{Repo, CronJob, Job}
   import Ecto.Query
+  require Logger
 
   @fallback_interval_ms 5_000
 
@@ -43,17 +44,19 @@ defmodule DistributedTaskQueue.CronScheduler do
              "cron_job_id" => cron.id
            }) do
         {:ok, _job} ->
-          next_run_at = CronJob.compute_next_run_at(cron)
-
-          cron
-          |> CronJob.changeset(%{
-            last_run_at: DateTime.utc_now() |> DateTime.truncate(:second),
-            next_run_at: next_run_at
-          })
-          |> Repo.update!()
+          try do
+            next_run_at = CronJob.compute_next_run_at(cron)
+            cron
+            |> CronJob.changeset(%{
+              last_run_at: DateTime.utc_now() |> DateTime.truncate(:second),
+              next_run_at: next_run_at
+            })
+            |> Repo.update()
+          rescue
+            e -> Logger.error("CronScheduler: failed to update cron #{cron.id} after fire: #{Exception.message(e)}")
+          end
 
         {:error, reason} ->
-          require Logger
           Logger.error("CronScheduler: failed to enqueue job for cron #{cron.id}: #{inspect(reason)}")
       end
     end
