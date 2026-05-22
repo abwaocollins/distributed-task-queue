@@ -23,6 +23,7 @@ defmodule DistributedTaskQueue.CronScheduler do
 
   @impl true
   def init(_opts) do
+    DistributedTaskQueue.upsert_cron_jobs_from_config()
     initialize_null_next_run_ats()
     schedule_next_poll()
     {:ok, %{}}

@@ -106,5 +106,25 @@ defmodule DistributedTaskQueue.CronSchedulerTest do
         {:error, {:already_started, _pid}} -> assert true
       end
     end
+
+    test "seeds cron jobs from application config on init" do
+      Application.put_env(:distributed_task_queue, :cron_jobs, [
+        %{
+          name: "scheduler-init-test",
+          worker_module: "MyApp.TestWorker",
+          queue_name: "default",
+          payload: %{},
+          interval_seconds: 300
+        }
+      ])
+
+      on_exit(fn -> Application.delete_env(:distributed_task_queue, :cron_jobs) end)
+
+      DistributedTaskQueue.upsert_cron_jobs_from_config()
+
+      cron = Repo.get_by(DistributedTaskQueue.CronJob, name: "scheduler-init-test")
+      assert cron != nil
+      assert cron.interval_seconds == 300
+    end
   end
 end
