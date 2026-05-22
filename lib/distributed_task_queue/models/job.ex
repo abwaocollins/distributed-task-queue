@@ -18,7 +18,7 @@ defmodule DistributedTaskQueue.Job do
     field(:discarded_at, :utc_datetime)
     field(:deleted_at, :utc_datetime)
     field(:attempted_by, :string)
-    field(:cron_job_id, :integer)
+    belongs_to(:cron_job, DistributedTaskQueue.CronJob)
 
     timestamps()
   end

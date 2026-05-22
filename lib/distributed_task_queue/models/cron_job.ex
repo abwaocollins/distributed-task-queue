@@ -16,6 +16,8 @@ defmodule DistributedTaskQueue.CronJob do
     field :last_run_at, :utc_datetime
     field :next_run_at, :utc_datetime
 
+    has_many(:jobs, DistributedTaskQueue.Job)
+
     timestamps()
   end
 

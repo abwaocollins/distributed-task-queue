@@ -107,6 +107,18 @@ defmodule DistributedTaskQueue.CronJobTest do
       cs = DistributedTaskQueue.Job.changeset(%DistributedTaskQueue.Job{}, attrs)
       assert Ecto.Changeset.get_change(cs, :cron_job_id) == 42
     end
+
+    test "belongs_to association allows preloading cron_job" do
+      cron = insert(:cron_job)
+      {:ok, job} = DistributedTaskQueue.add_job(cron.queue_name, %{
+        "worker_module" => cron.worker_module,
+        "payload" => %{},
+        "cron_job_id" => cron.id
+      })
+
+      loaded = DistributedTaskQueue.Repo.preload(job, :cron_job)
+      assert loaded.cron_job.id == cron.id
+    end
   end
 
   describe "create_cron_job/1" do
