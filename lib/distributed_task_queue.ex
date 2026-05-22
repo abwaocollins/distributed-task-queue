@@ -277,7 +277,7 @@ defmodule DistributedTaskQueue do
         )
       else
         Logger.error(
-          "CronScheduler: invalid config entry #{inspect(attrs)}: #{inspect(changeset.errors)}"
+          "DistributedTaskQueue: invalid cron_jobs config entry #{inspect(attrs)}: #{inspect(changeset.errors)}"
         )
 
         {:error, changeset}
