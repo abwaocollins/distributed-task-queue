@@ -5,6 +5,7 @@ defmodule DistributedTaskQueue do
   alias DistributedTaskQueue.Repo
   alias DistributedTaskQueue.{Job, Queue, CronJob}
   import Ecto.Query
+  require Logger
 
   def add_job(queue_name, job_attrs) do
     %Job{}
@@ -247,6 +248,41 @@ defmodule DistributedTaskQueue do
 
   def disable_cron_job(cron_job) do
     cron_job |> CronJob.changeset(%{enabled: false}) |> Repo.update()
+  end
+
+  def upsert_cron_jobs_from_config do
+    Application.get_env(:distributed_task_queue, :cron_jobs, [])
+    |> Enum.map(fn attrs ->
+      changeset =
+        %CronJob{}
+        |> CronJob.changeset(Map.put(attrs, :next_run_at, nil))
+
+      if changeset.valid? do
+        Repo.insert(changeset,
+          on_conflict:
+            {:replace,
+             [
+               :worker_module,
+               :queue_name,
+               :cron_expression,
+               :interval_seconds,
+               :payload,
+               :max_attempts,
+               :overlap,
+               :description,
+               :next_run_at,
+               :updated_at
+             ]},
+          conflict_target: :name
+        )
+      else
+        Logger.error(
+          "CronScheduler: invalid config entry #{inspect(attrs)}: #{inspect(changeset.errors)}"
+        )
+
+        {:error, changeset}
+      end
+    end)
   end
 
   defp put_next_run_at(changeset) do

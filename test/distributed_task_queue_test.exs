@@ -5,3 +5,85 @@ defmodule DistributedTaskQueueTest do
     assert :ok == :application.ensure_started(:distributed_task_queue)
   end
 end
+
+defmodule DistributedTaskQueue.UpsertCronJobsFromConfigTest do
+  use DistributedTaskQueue.DataCase, async: false
+
+  alias DistributedTaskQueue.{Repo, CronJob}
+
+  @valid_entry %{
+    name: "config-test-cron",
+    worker_module: "MyApp.TestWorker",
+    queue_name: "default",
+    payload: %{},
+    interval_seconds: 60
+  }
+
+  setup do
+    on_exit(fn -> Application.delete_env(:distributed_task_queue, :cron_jobs) end)
+    :ok
+  end
+
+  describe "upsert_cron_jobs_from_config/0" do
+    test "inserts a new cron job from config" do
+      Application.put_env(:distributed_task_queue, :cron_jobs, [@valid_entry])
+
+      DistributedTaskQueue.upsert_cron_jobs_from_config()
+
+      cron = Repo.get_by(CronJob, name: "config-test-cron")
+      assert cron.worker_module == "MyApp.TestWorker"
+      assert cron.interval_seconds == 60
+      assert is_nil(cron.next_run_at)
+    end
+
+    test "updates worker_module on conflict (name already exists)" do
+      Application.put_env(:distributed_task_queue, :cron_jobs, [@valid_entry])
+      DistributedTaskQueue.upsert_cron_jobs_from_config()
+
+      updated_entry = Map.put(@valid_entry, :worker_module, "MyApp.UpdatedWorker")
+      Application.put_env(:distributed_task_queue, :cron_jobs, [updated_entry])
+      DistributedTaskQueue.upsert_cron_jobs_from_config()
+
+      cron = Repo.get_by(CronJob, name: "config-test-cron")
+      assert cron.worker_module == "MyApp.UpdatedWorker"
+    end
+
+    test "sets next_run_at to nil on conflict so it gets recomputed" do
+      insert(:cron_job, name: "config-test-cron", interval_seconds: 60,
+             next_run_at: ~U[2099-01-01 00:00:00Z])
+      Application.put_env(:distributed_task_queue, :cron_jobs, [@valid_entry])
+
+      DistributedTaskQueue.upsert_cron_jobs_from_config()
+
+      cron = Repo.get_by(CronJob, name: "config-test-cron")
+      assert is_nil(cron.next_run_at)
+    end
+
+    test "preserves enabled flag on conflict" do
+      insert(:cron_job, name: "config-test-cron", interval_seconds: 60, enabled: false)
+      Application.put_env(:distributed_task_queue, :cron_jobs, [@valid_entry])
+
+      DistributedTaskQueue.upsert_cron_jobs_from_config()
+
+      cron = Repo.get_by(CronJob, name: "config-test-cron")
+      refute cron.enabled
+    end
+
+    test "does nothing when config is empty" do
+      Application.put_env(:distributed_task_queue, :cron_jobs, [])
+
+      DistributedTaskQueue.upsert_cron_jobs_from_config()
+
+      assert Repo.aggregate(CronJob, :count) == 0
+    end
+
+    test "returns error tuple for invalid config entry, does not raise" do
+      bad_entry = %{name: "bad-cron"}
+      Application.put_env(:distributed_task_queue, :cron_jobs, [bad_entry])
+
+      results = DistributedTaskQueue.upsert_cron_jobs_from_config()
+
+      assert [{:error, _changeset}] = results
+    end
+  end
+end
