@@ -107,7 +107,7 @@ defmodule DistributedTaskQueue.CronSchedulerTest do
       end
     end
 
-    test "seeds cron jobs from application config on init" do
+    test "upsert_cron_jobs_from_config/0 seeds cron jobs from application config" do
       Application.put_env(:distributed_task_queue, :cron_jobs, [
         %{
           name: "scheduler-init-test",

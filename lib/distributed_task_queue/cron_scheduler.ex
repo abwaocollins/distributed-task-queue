@@ -23,10 +23,28 @@ defmodule DistributedTaskQueue.CronScheduler do
 
   @impl true
   def init(_opts) do
-    DistributedTaskQueue.upsert_cron_jobs_from_config()
-    initialize_null_next_run_ats()
-    schedule_next_poll()
-    {:ok, %{}}
+    {:ok, %{}, {:continue, :seed_and_init}}
+  end
+
+  @impl true
+  def handle_continue(:seed_and_init, state) do
+    try do
+      DistributedTaskQueue.upsert_cron_jobs_from_config()
+      initialize_null_next_run_ats()
+    rescue
+      e ->
+        Logger.error("CronScheduler: seed_and_init failed: #{Exception.message(e)}")
+    end
+
+    try do
+      schedule_next_poll()
+    rescue
+      e ->
+        Logger.error("CronScheduler: schedule_next_poll failed on init: #{Exception.message(e)}")
+        Process.send_after(self(), :poll, @fallback_interval_ms)
+    end
+
+    {:noreply, state}
   end
 
   @impl true

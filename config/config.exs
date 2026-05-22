@@ -89,7 +89,8 @@ config :phoenix, :json_library, Jason
 #       name: "cleanup",
 #       worker_module: "MyApp.CleanupWorker",
 #       queue_name: "low",
-#       interval_seconds: 3600
+#       interval_seconds: 3600,
+#       payload: %{}
 #     }
 #   ]
 config :distributed_task_queue, :cron_jobs, []
