@@ -1,7 +1,7 @@
 defmodule DistributedTaskQueue.QueueBootstrapperTest do
   use DistributedTaskQueue.DataCase, async: false
 
-  alias DistributedTaskQueue.WorkerSupervisor
+  alias DistributedTaskQueue.{QueueCache, WorkerSupervisor}
 
   setup do
     on_exit(fn ->
@@ -23,6 +23,19 @@ defmodule DistributedTaskQueue.QueueBootstrapperTest do
     after
       2000 -> flunk("Bootstrapper did not exit within 2 seconds")
     end
+  end
+
+  test "populates QueueCache on boot" do
+    queue = insert(:queue,
+      name: "cache-boot-#{System.unique_integer([:positive])}",
+      max_concurrent_jobs: 2
+    )
+
+    run_bootstrapper()
+
+    cached = QueueCache.get(queue.name)
+    assert cached != nil
+    assert cached.name == queue.name
   end
 
   test "boots all queues from the database" do
