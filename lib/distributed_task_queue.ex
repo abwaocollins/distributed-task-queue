@@ -3,7 +3,7 @@ defmodule DistributedTaskQueue do
 
   alias DistributedTaskQueue.WorkerSupervisor
   alias DistributedTaskQueue.Repo
-  alias DistributedTaskQueue.{Job, Queue, CronJob}
+  alias DistributedTaskQueue.{Job, Queue, CronJob, QueueCache}
   import Ecto.Query
   require Logger
 
@@ -14,9 +14,17 @@ defmodule DistributedTaskQueue do
   end
 
   def add_queue(attrs) when is_map(attrs) do
-    %Queue{}
-    |> Queue.changeset(attrs)
-    |> Repo.insert()
+    result =
+      %Queue{}
+      |> Queue.changeset(attrs)
+      |> Repo.insert()
+
+    case result do
+      {:ok, queue} -> QueueCache.put(queue)
+      _ -> :ok
+    end
+
+    result
   end
 
   def add_queue(queue_name) when is_binary(queue_name) do
@@ -219,6 +227,40 @@ defmodule DistributedTaskQueue do
         else
           WorkerSupervisor.stop_queue(queue_name)
         end
+    end
+  end
+
+  def pause_queue(queue_name) do
+    case get_queue(queue_name) do
+      nil ->
+        {:error, :queue_not_found}
+
+      queue ->
+        result = queue |> Queue.changeset(%{paused: true}) |> Repo.update()
+
+        case result do
+          {:ok, updated} -> QueueCache.put(updated)
+          _ -> :ok
+        end
+
+        result
+    end
+  end
+
+  def resume_queue(queue_name) do
+    case get_queue(queue_name) do
+      nil ->
+        {:error, :queue_not_found}
+
+      queue ->
+        result = queue |> Queue.changeset(%{paused: false}) |> Repo.update()
+
+        case result do
+          {:ok, updated} -> QueueCache.put(updated)
+          _ -> :ok
+        end
+
+        result
     end
   end
 

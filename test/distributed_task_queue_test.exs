@@ -87,3 +87,43 @@ defmodule DistributedTaskQueue.UpsertCronJobsFromConfigTest do
     end
   end
 end
+
+defmodule DistributedTaskQueue.QueuePauseTest do
+  use DistributedTaskQueue.DataCase, async: false
+
+  alias DistributedTaskQueue.QueueCache
+
+  setup do
+    QueueCache.all() |> Enum.each(&QueueCache.delete(&1.name))
+    :ok
+  end
+
+  test "add_queue writes the queue to QueueCache" do
+    {:ok, queue} = DistributedTaskQueue.add_queue(%{"name" => "cache-write-q"})
+    assert QueueCache.get("cache-write-q") != nil
+    assert QueueCache.get("cache-write-q").name == queue.name
+  end
+
+  test "pause_queue sets paused: true in DB and cache" do
+    {:ok, _} = DistributedTaskQueue.add_queue(%{"name" => "pausable-q"})
+    {:ok, paused} = DistributedTaskQueue.pause_queue("pausable-q")
+    assert paused.paused == true
+    assert QueueCache.get("pausable-q").paused == true
+  end
+
+  test "resume_queue sets paused: false in DB and cache" do
+    {:ok, _} = DistributedTaskQueue.add_queue(%{"name" => "resumable-q"})
+    {:ok, _} = DistributedTaskQueue.pause_queue("resumable-q")
+    {:ok, resumed} = DistributedTaskQueue.resume_queue("resumable-q")
+    assert resumed.paused == false
+    assert QueueCache.get("resumable-q").paused == false
+  end
+
+  test "pause_queue returns error for unknown queue" do
+    assert DistributedTaskQueue.pause_queue("ghost-queue") == {:error, :queue_not_found}
+  end
+
+  test "resume_queue returns error for unknown queue" do
+    assert DistributedTaskQueue.resume_queue("ghost-queue") == {:error, :queue_not_found}
+  end
+end
