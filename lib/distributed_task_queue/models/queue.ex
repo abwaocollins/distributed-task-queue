@@ -6,13 +6,14 @@ defmodule DistributedTaskQueue.Queue do
     field(:name, :string)
     field(:description, :string)
     field(:max_concurrent_jobs, :integer, default: 5)
+    field(:paused, :boolean, default: false)
 
     timestamps()
   end
 
   def changeset(queue, attrs) do
     queue
-    |> cast(attrs, [:name, :description, :max_concurrent_jobs])
+    |> cast(attrs, [:name, :description, :max_concurrent_jobs, :paused])
     |> validate_required([:name])
     |> unique_constraint(:name)
   end
