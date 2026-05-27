@@ -10,7 +10,7 @@ defmodule DistributedTaskQueue.QueueCache do
     {:ok, :ok}
   end
 
-  def put(%{name: name} = queue) do
+  def put(%DistributedTaskQueue.Queue{name: name} = queue) do
     :ets.insert(@table, {name, queue})
     :ok
   end

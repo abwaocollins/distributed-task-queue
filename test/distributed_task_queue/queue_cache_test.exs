@@ -36,6 +36,7 @@ defmodule DistributedTaskQueue.QueueCacheTest do
     QueueCache.put(%Queue{name: "all-q1", max_concurrent_jobs: 2})
     QueueCache.put(%Queue{name: "all-q2", max_concurrent_jobs: 3})
     names = QueueCache.all() |> Enum.map(& &1.name) |> Enum.sort()
+    assert length(names) == 2
     assert "all-q1" in names
     assert "all-q2" in names
   end
