@@ -127,3 +127,43 @@ defmodule DistributedTaskQueue.QueuePauseTest do
     assert DistributedTaskQueue.resume_queue("ghost-queue") == {:error, :queue_not_found}
   end
 end
+
+defmodule DistributedTaskQueue.DeadLetterTest do
+  use DistributedTaskQueue.DataCase, async: true
+
+  test "discarding a job sets dead_letter: true" do
+    queue = insert(:queue)
+    job = insert(:job, queue_name: queue.name, status: "pending", max_attempts: 1)
+
+    {:ok, discarded} = DistributedTaskQueue.update_job_status(job.id, "discarded", "exhausted")
+
+    assert discarded.dead_letter == true
+    assert discarded.status == "discarded"
+    assert discarded.discarded_at != nil
+  end
+
+  test "non-discarded status transitions do not set dead_letter" do
+    queue = insert(:queue)
+    job = insert(:job, queue_name: queue.name, status: "pending")
+
+    {:ok, completed} = DistributedTaskQueue.update_job_status(job.id, "completed")
+
+    assert completed.dead_letter == false
+  end
+
+  test "list_dead_letter_jobs returns only dead-lettered jobs" do
+    queue = insert(:queue)
+    job_a = insert(:job, queue_name: queue.name, max_attempts: 1)
+    job_b = insert(:job, queue_name: queue.name, max_attempts: 1)
+    _job_c = insert(:job, queue_name: queue.name, max_attempts: 3)
+
+    DistributedTaskQueue.update_job_status(job_a.id, "discarded", "failed")
+    DistributedTaskQueue.update_job_status(job_b.id, "discarded", "failed")
+
+    dead = DistributedTaskQueue.list_dead_letter_jobs()
+    ids = Enum.map(dead, & &1.id)
+
+    assert job_a.id in ids
+    assert job_b.id in ids
+  end
+end

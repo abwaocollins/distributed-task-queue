@@ -54,6 +54,10 @@ defmodule DistributedTaskQueue do
     Repo.all(from j in Job, where: j.status == "pending")
   end
 
+  def list_dead_letter_jobs do
+    Repo.all(from j in Job, where: j.dead_letter == true, order_by: [desc: j.discarded_at])
+  end
+
   def list_jobs_filtered(filters \\ %{}) do
     query = from j in Job, where: is_nil(j.deleted_at)
 
@@ -132,7 +136,7 @@ defmodule DistributedTaskQueue do
             %{"completed_at" => DateTime.utc_now()}
 
           "discarded" ->
-            %{"discarded_at" => DateTime.utc_now(), "error_message" => error_message}
+            %{"discarded_at" => DateTime.utc_now(), "error_message" => error_message, "dead_letter" => true}
 
           "retryable" ->
             %{
