@@ -16,6 +16,7 @@ defmodule DistributedTaskQueue.Application do
       {Finch, name: DistributedTaskQueue.Finch},
       {Registry, keys: :unique, name: DistributedTaskQueue.WorkerRegistry},
       DistributedTaskQueue.WorkerSupervisor,
+      DistributedTaskQueue.QueueCache,
       DistributedTaskQueue.QueueBootstrapper,
       DistributedTaskQueue.CronScheduler,
       DistributedTaskQueueWeb.Endpoint
