@@ -167,3 +167,43 @@ defmodule DistributedTaskQueue.DeadLetterTest do
     assert job_b.id in ids
   end
 end
+
+defmodule DistributedTaskQueue.DeleteQueueTest do
+  use DistributedTaskQueue.DataCase, async: false
+
+  alias DistributedTaskQueue.{QueueCache, WorkerSupervisor}
+
+  setup do
+    QueueCache.all() |> Enum.each(&QueueCache.delete(&1.name))
+    :ok
+  end
+
+  test "delete_queue removes the queue, its jobs, the cache entry, and stops the manager" do
+    {:ok, queue} =
+      DistributedTaskQueue.add_queue(%{
+        "name" => "del-q-#{System.unique_integer([:positive])}",
+        "max_concurrent_jobs" => 2
+      })
+
+    {:ok, _job} =
+      DistributedTaskQueue.add_job(queue.name, %{
+        "worker_module" => "DistributedTaskQueue.EmailWorker",
+        "payload" => %{}
+      })
+
+    {:ok, _pid} = WorkerSupervisor.start_queue(queue.name, queue.max_concurrent_jobs)
+    assert [{_pid, _}] = Registry.lookup(DistributedTaskQueue.WorkerRegistry, queue.name)
+
+    assert {:ok, deleted} = DistributedTaskQueue.delete_queue(queue.name)
+    assert deleted.name == queue.name
+
+    assert DistributedTaskQueue.get_queue(queue.name) == nil
+    assert DistributedTaskQueue.list_jobs_in_queue(queue.name) == []
+    assert QueueCache.get(queue.name) == nil
+    assert Registry.lookup(DistributedTaskQueue.WorkerRegistry, queue.name) == []
+  end
+
+  test "delete_queue returns error for unknown queue" do
+    assert DistributedTaskQueue.delete_queue("ghost-queue") == {:error, :queue_not_found}
+  end
+end

@@ -234,6 +234,26 @@ defmodule DistributedTaskQueue do
     end
   end
 
+  def delete_queue(queue_name) do
+    case get_queue(queue_name) do
+      nil ->
+        {:error, :queue_not_found}
+
+      queue ->
+        # Stop the manager first so it cannot claim a job that is about to be deleted.
+        WorkerSupervisor.stop_queue(queue_name)
+
+        {:ok, _} =
+          Repo.transaction(fn ->
+            Repo.delete_all(from j in Job, where: j.queue_name == ^queue_name)
+            Repo.delete!(queue)
+          end)
+
+        QueueCache.delete(queue_name)
+        {:ok, queue}
+    end
+  end
+
   def pause_queue(queue_name) do
     case get_queue(queue_name) do
       nil ->
