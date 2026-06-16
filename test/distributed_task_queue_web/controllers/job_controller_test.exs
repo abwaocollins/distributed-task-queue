@@ -125,4 +125,38 @@ defmodule DistributedTaskQueueWeb.JobControllerTest do
       assert %{"error" => _} = json_response(conn, 404)
     end
   end
+
+  describe "POST /api/jobs/:id/requeue" do
+    test "requeues a dead-letter job", %{conn: conn} do
+      queue = insert(:queue, name: "ctrl-rq-#{System.unique_integer([:positive])}")
+      on_exit(fn -> DistributedTaskQueue.WorkerSupervisor.stop_queue(queue.name) end)
+      job = insert(:job, queue_name: queue.name, status: "discarded", dead_letter: true, worker_id: 1)
+
+      conn = post(conn, ~p"/api/jobs/#{job.id}/requeue")
+      assert %{"data" => %{"status" => "pending"}} = json_response(conn, 200)
+    end
+
+    test "returns 404 for unknown job", %{conn: conn} do
+      conn = post(conn, ~p"/api/jobs/0/requeue")
+      assert %{"error" => _} = json_response(conn, 404)
+    end
+
+    test "returns 422 for a non-dead-letter job", %{conn: conn} do
+      job = insert(:job, status: "completed", dead_letter: false)
+      conn = post(conn, ~p"/api/jobs/#{job.id}/requeue")
+      assert %{"error" => _} = json_response(conn, 422)
+    end
+  end
+
+  describe "POST /api/jobs/requeue_dead_letter" do
+    test "requeues all dead-letter jobs and returns the count", %{conn: conn} do
+      queue = insert(:queue, name: "ctrl-bulk-#{System.unique_integer([:positive])}")
+      on_exit(fn -> DistributedTaskQueue.WorkerSupervisor.stop_queue(queue.name) end)
+      insert(:job, queue_name: queue.name, status: "discarded", dead_letter: true, worker_id: 1)
+      insert(:job, queue_name: queue.name, status: "discarded", dead_letter: true, worker_id: 2)
+
+      conn = post(conn, ~p"/api/jobs/requeue_dead_letter")
+      assert %{"data" => %{"requeued" => 2}} = json_response(conn, 200)
+    end
+  end
 end

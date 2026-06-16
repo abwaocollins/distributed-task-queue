@@ -28,6 +28,8 @@ defmodule DistributedTaskQueueWeb.Router do
     post "/queues/:name/stop",  QueueController, :stop
     delete "/queues/:name", QueueController, :delete
 
+    post "/jobs/:id/requeue", JobController, :requeue
+    post "/jobs/requeue_dead_letter", JobController, :requeue_all
     resources "/jobs", JobController, only: [:index, :show, :create, :delete]
   end
 
