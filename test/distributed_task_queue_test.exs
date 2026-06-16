@@ -207,3 +207,61 @@ defmodule DistributedTaskQueue.DeleteQueueTest do
     assert DistributedTaskQueue.delete_queue("ghost-queue") == {:error, :queue_not_found}
   end
 end
+
+defmodule DistributedTaskQueue.RequeueDeadLetterTest do
+  use DistributedTaskQueue.DataCase, async: false
+
+  alias DistributedTaskQueue.WorkerSupervisor
+
+  test "requeue_dead_letter_job resets the job to a claimable pending state" do
+    queue = insert(:queue, name: "rq-#{System.unique_integer([:positive])}")
+    on_exit(fn -> WorkerSupervisor.stop_queue(queue.name) end)
+
+    job =
+      insert(:job,
+        queue_name: queue.name,
+        status: "discarded",
+        dead_letter: true,
+        worker_id: 1,
+        attempts: 3,
+        error_message: "boom",
+        discarded_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      )
+
+    assert {:ok, requeued} = DistributedTaskQueue.requeue_dead_letter_job(job.id)
+    assert requeued.status == "pending"
+    assert requeued.dead_letter == false
+    assert requeued.attempts == 0
+    assert is_nil(requeued.worker_id)
+    assert is_nil(requeued.discarded_at)
+    assert is_nil(requeued.error_message)
+
+    # The queue's manager was (re)started so the job can be picked up.
+    assert [{_pid, _}] = Registry.lookup(DistributedTaskQueue.WorkerRegistry, queue.name)
+  end
+
+  test "requeue_dead_letter_job returns error for unknown job" do
+    assert DistributedTaskQueue.requeue_dead_letter_job(0) == {:error, :not_found}
+  end
+
+  test "requeue_dead_letter_job returns error for a non-dead-letter job" do
+    queue = insert(:queue, name: "rq-live-#{System.unique_integer([:positive])}")
+    job = insert(:job, queue_name: queue.name, status: "completed", dead_letter: false)
+
+    assert DistributedTaskQueue.requeue_dead_letter_job(job.id) == {:error, :not_dead_letter}
+  end
+
+  test "requeue_all_dead_letter_jobs requeues every dead-lettered job" do
+    queue = insert(:queue, name: "bulk-rq-#{System.unique_integer([:positive])}")
+    on_exit(fn -> WorkerSupervisor.stop_queue(queue.name) end)
+
+    a = insert(:job, queue_name: queue.name, status: "discarded", dead_letter: true, worker_id: 1)
+    b = insert(:job, queue_name: queue.name, status: "discarded", dead_letter: true, worker_id: 2)
+    _live = insert(:job, queue_name: queue.name, status: "pending", dead_letter: false)
+
+    assert {:ok, 2} = DistributedTaskQueue.requeue_all_dead_letter_jobs()
+    assert DistributedTaskQueue.get_job(a.id).status == "pending"
+    assert DistributedTaskQueue.get_job(b.id).status == "pending"
+    assert DistributedTaskQueue.list_dead_letter_jobs() == []
+  end
+end

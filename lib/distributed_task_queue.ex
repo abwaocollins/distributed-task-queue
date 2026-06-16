@@ -58,6 +58,71 @@ defmodule DistributedTaskQueue do
     Repo.all(from j in Job, where: j.dead_letter == true, order_by: [desc: j.discarded_at])
   end
 
+  def requeue_dead_letter_job(job_id) do
+    job = Repo.get(Job, job_id)
+
+    cond do
+      is_nil(job) ->
+        {:error, :not_found}
+
+      job.dead_letter != true ->
+        {:error, :not_dead_letter}
+
+      true ->
+        result =
+          job
+          |> Job.changeset(%{
+            "status" => "pending",
+            "dead_letter" => false,
+            "attempts" => 0,
+            "worker_id" => nil,
+            "error_message" => nil,
+            "discarded_at" => nil,
+            "next_retry_at" => nil,
+            "started_at" => nil,
+            "completed_at" => nil
+          })
+          |> Repo.update()
+
+        case result do
+          {:ok, updated} ->
+            ensure_queue_running(updated.queue_name)
+            {:ok, updated}
+
+          other ->
+            other
+        end
+    end
+  end
+
+  def requeue_all_dead_letter_jobs do
+    count =
+      list_dead_letter_jobs()
+      |> Enum.reduce(0, fn job, acc ->
+        case requeue_dead_letter_job(job.id) do
+          {:ok, _} -> acc + 1
+          _ -> acc
+        end
+      end)
+
+    {:ok, count}
+  end
+
+  # Start the queue's manager if it isn't already running, so a requeued job is
+  # actually claimed. Idempotent: an already-running manager returns
+  # {:error, {:already_started, _}}, which we ignore. If the queue row is gone,
+  # there is nothing to start.
+  defp ensure_queue_running(queue_name) do
+    case get_queue(queue_name) do
+      nil ->
+        :ok
+
+      queue ->
+        WorkerSupervisor.start_queue(queue_name, queue.max_concurrent_jobs)
+        :ok
+    end
+  end
+
   def list_jobs_filtered(filters \\ %{}) do
     query = from j in Job, where: is_nil(j.deleted_at)
 
