@@ -26,6 +26,7 @@ defmodule DistributedTaskQueueWeb.Router do
     resources "/queues", QueueController, only: [:index, :create]
     post "/queues/:name/start", QueueController, :start
     post "/queues/:name/stop",  QueueController, :stop
+    delete "/queues/:name", QueueController, :delete
 
     resources "/jobs", JobController, only: [:index, :show, :create, :delete]
   end
