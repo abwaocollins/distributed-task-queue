@@ -3,7 +3,7 @@ defmodule DistributedTaskQueue do
 
   alias DistributedTaskQueue.WorkerSupervisor
   alias DistributedTaskQueue.Repo
-  alias DistributedTaskQueue.{Job, Queue, CronJob, QueueCache}
+  alias DistributedTaskQueue.{CronJob, CronScheduler, Job, Queue, QueueCache}
   import Ecto.Query
   require Logger
 
@@ -108,11 +108,19 @@ defmodule DistributedTaskQueue do
     {:ok, count}
   end
 
-  # Start the queue's manager if it isn't already running, so a requeued job is
-  # actually claimed. Idempotent: an already-running manager returns
-  # {:error, {:already_started, _}}, which we ignore. If the queue row is gone,
-  # there is nothing to start.
-  defp ensure_queue_running(queue_name) do
+  @doc """
+  Start the queue's manager if it isn't already running, so a newly available
+  job is actually claimed.
+
+  A `QueueManager` stops itself once its queue drains, and only
+  `QueueBootstrapper` starts them at boot — so anything that makes a job
+  claimable *after* boot (a requeue, a cron firing) has to call this or the job
+  sits `pending` forever.
+
+  Idempotent: an already-running manager returns `{:error, {:already_started, _}}`,
+  which we ignore. If the queue row is gone, there is nothing to start.
+  """
+  def ensure_queue_running(queue_name) do
     case get_queue(queue_name) do
       nil ->
         :ok
@@ -308,13 +316,35 @@ defmodule DistributedTaskQueue do
         # Stop the manager first so it cannot claim a job that is about to be deleted.
         WorkerSupervisor.stop_queue(queue_name)
 
-        {:ok, _} =
+        {:ok, disabled} =
           Repo.transaction(fn ->
             Repo.delete_all(from j in Job, where: j.queue_name == ^queue_name)
+
+            # Cron jobs point at a queue by name, with no FK to cascade. Left
+            # enabled they would keep enqueueing into a queue that no longer
+            # exists, producing jobs nothing can ever run. Disable rather than
+            # delete so the definition survives and can be repointed.
+            {count, _} =
+              Repo.update_all(
+                from(c in CronJob, where: c.queue_name == ^queue_name and c.enabled == true),
+                set: [
+                  enabled: false,
+                  updated_at: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+                ]
+              )
+
             Repo.delete!(queue)
+            count
           end)
 
+        if disabled > 0 do
+          Logger.warning(
+            "DistributedTaskQueue: disabled #{disabled} cron job(s) targeting deleted queue #{queue_name}"
+          )
+        end
+
         QueueCache.delete(queue_name)
+        CronScheduler.reschedule()
         {:ok, queue}
     end
   end
@@ -358,6 +388,7 @@ defmodule DistributedTaskQueue do
     |> CronJob.changeset(attrs)
     |> put_next_run_at()
     |> Repo.insert()
+    |> notify_scheduler()
   end
 
   def list_cron_jobs, do: Repo.all(CronJob)
@@ -369,50 +400,91 @@ defmodule DistributedTaskQueue do
     |> CronJob.changeset(attrs)
     |> put_next_run_at_if_schedule_changed()
     |> Repo.update()
+    |> notify_scheduler()
   end
 
-  def delete_cron_job(cron_job), do: Repo.delete(cron_job)
+  def delete_cron_job(cron_job), do: cron_job |> Repo.delete() |> notify_scheduler()
 
+  @doc """
+  Re-enable a cron job, restarting its schedule from now.
+
+  `next_run_at` is always recomputed: a cron that was disabled for a week has a
+  `next_run_at` far in the past, and leaving it there would fire an unintended
+  catch-up run the moment it came back.
+  """
   def enable_cron_job(cron_job) do
-    cron_job |> CronJob.changeset(%{enabled: true}) |> Repo.update()
+    cron_job
+    |> CronJob.changeset(%{enabled: true})
+    |> put_next_run_at()
+    |> Repo.update()
+    |> notify_scheduler()
   end
 
   def disable_cron_job(cron_job) do
-    cron_job |> CronJob.changeset(%{enabled: false}) |> Repo.update()
+    cron_job
+    |> CronJob.changeset(%{enabled: false})
+    |> Repo.update()
+    |> notify_scheduler()
   end
+
+  # The scheduler sleeps until the next known run, so any write that changes
+  # when something is due has to wake it — otherwise a cron due in 10s can wait
+  # for a run that is an hour out.
+  defp notify_scheduler({:ok, _} = result) do
+    CronScheduler.reschedule()
+    result
+  end
+
+  defp notify_scheduler(result), do: result
+
+  @config_replace_fields [
+    :worker_module,
+    :queue_name,
+    :cron_expression,
+    :interval_seconds,
+    :timezone,
+    :payload,
+    :max_attempts,
+    :overlap,
+    :description,
+    :updated_at
+  ]
 
   def upsert_cron_jobs_from_config do
     Application.get_env(:distributed_task_queue, :cron_jobs, [])
-    |> Enum.map(fn attrs ->
-      changeset =
-        %CronJob{}
-        |> CronJob.changeset(Map.put(attrs, :next_run_at, nil))
+    |> Enum.map(&upsert_cron_job_from_config/1)
+  end
 
-      if changeset.valid? do
-        Repo.insert(changeset,
-          on_conflict:
-            {:replace,
-             [
-               :worker_module,
-               :queue_name,
-               :cron_expression,
-               :interval_seconds,
-               :payload,
-               :max_attempts,
-               :overlap,
-               :description,
-               :next_run_at,
-               :updated_at
-             ]},
-          conflict_target: :name
-        )
-      else
-        Logger.error(
-          "DistributedTaskQueue: invalid cron_jobs config entry #{inspect(attrs)}: #{inspect(changeset.errors)}"
-        )
+  defp upsert_cron_job_from_config(attrs) do
+    changeset = CronJob.changeset(%CronJob{}, Map.put(attrs, :next_run_at, nil))
 
-        {:error, changeset}
-      end
+    if changeset.valid? do
+      existing = Repo.get_by(CronJob, name: Ecto.Changeset.get_field(changeset, :name))
+
+      # Clearing next_run_at on every boot pushes the schedule back each restart —
+      # a service that redeploys hourly could keep deferring an hourly cron past
+      # its slot forever. Only reset it when the schedule itself actually changed;
+      # a nil next_run_at is recomputed by CronScheduler right after this runs.
+      replace =
+        if schedule_changed?(existing, changeset),
+          do: [:next_run_at | @config_replace_fields],
+          else: @config_replace_fields
+
+      Repo.insert(changeset, on_conflict: {:replace, replace}, conflict_target: :name)
+    else
+      Logger.error(
+        "DistributedTaskQueue: invalid cron_jobs config entry #{inspect(attrs)}: #{inspect(changeset.errors)}"
+      )
+
+      {:error, changeset}
+    end
+  end
+
+  defp schedule_changed?(nil, _changeset), do: true
+
+  defp schedule_changed?(existing, changeset) do
+    Enum.any?([:cron_expression, :interval_seconds, :timezone], fn field ->
+      Ecto.Changeset.get_field(changeset, field) != Map.fetch!(existing, field)
     end)
   end
 

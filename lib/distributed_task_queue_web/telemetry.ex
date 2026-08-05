@@ -75,6 +75,19 @@ defmodule DistributedTaskQueueWeb.Telemetry do
       summary("dtq.job.failed.duration",
         tags: [:queue_name, :worker_module],
         unit: {:millisecond, :millisecond}
+      ),
+
+      # DTQ Cron Metrics
+      # `skipped` is the one to watch: a cron that skips forever is an
+      # overlap-blocked schedule that has silently stopped running.
+      counter("dtq.cron.fired.count",
+        tags: [:cron_name, :queue_name]
+      ),
+      counter("dtq.cron.skipped.count",
+        tags: [:cron_name, :queue_name, :reason]
+      ),
+      counter("dtq.cron.failed.count",
+        tags: [:cron_name, :queue_name]
       )
     ]
   end

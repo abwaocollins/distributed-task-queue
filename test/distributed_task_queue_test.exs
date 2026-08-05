@@ -48,7 +48,9 @@ defmodule DistributedTaskQueue.UpsertCronJobsFromConfigTest do
       assert cron.worker_module == "MyApp.UpdatedWorker"
     end
 
-    test "sets next_run_at to nil on conflict so it gets recomputed" do
+    test "preserves next_run_at on conflict when the schedule is unchanged" do
+      # Boot must not push a pending run back, or a service that restarts more
+      # often than its cron interval would never fire it.
       insert(:cron_job, name: "config-test-cron", interval_seconds: 60,
              next_run_at: ~U[2099-01-01 00:00:00Z])
       Application.put_env(:distributed_task_queue, :cron_jobs, [@valid_entry])
@@ -56,6 +58,38 @@ defmodule DistributedTaskQueue.UpsertCronJobsFromConfigTest do
       DistributedTaskQueue.upsert_cron_jobs_from_config()
 
       cron = Repo.get_by(CronJob, name: "config-test-cron")
+      assert cron.next_run_at == ~U[2099-01-01 00:00:00Z]
+    end
+
+    test "resets next_run_at on conflict when interval_seconds changes" do
+      insert(:cron_job, name: "config-test-cron", interval_seconds: 60,
+             next_run_at: ~U[2099-01-01 00:00:00Z])
+      Application.put_env(:distributed_task_queue, :cron_jobs,
+        [Map.put(@valid_entry, :interval_seconds, 900)])
+
+      DistributedTaskQueue.upsert_cron_jobs_from_config()
+
+      cron = Repo.get_by(CronJob, name: "config-test-cron")
+      assert cron.interval_seconds == 900
+      assert is_nil(cron.next_run_at)
+    end
+
+    test "resets next_run_at on conflict when the schedule switches to a cron expression" do
+      insert(:cron_job, name: "config-test-cron", interval_seconds: 60,
+             next_run_at: ~U[2099-01-01 00:00:00Z])
+
+      entry =
+        @valid_entry
+        |> Map.delete(:interval_seconds)
+        |> Map.put(:cron_expression, "0 9 * * *")
+
+      Application.put_env(:distributed_task_queue, :cron_jobs, [entry])
+
+      DistributedTaskQueue.upsert_cron_jobs_from_config()
+
+      cron = Repo.get_by(CronJob, name: "config-test-cron")
+      assert cron.cron_expression == "0 9 * * *"
+      assert is_nil(cron.interval_seconds)
       assert is_nil(cron.next_run_at)
     end
 
@@ -205,6 +239,21 @@ defmodule DistributedTaskQueue.DeleteQueueTest do
 
   test "delete_queue returns error for unknown queue" do
     assert DistributedTaskQueue.delete_queue("ghost-queue") == {:error, :queue_not_found}
+  end
+
+  test "delete_queue disables cron jobs that target the deleted queue" do
+    {:ok, queue} =
+      DistributedTaskQueue.add_queue(%{"name" => "del-cron-q-#{System.unique_integer([:positive])}"})
+
+    targeting = insert(:cron_job, queue_name: queue.name, enabled: true)
+    untouched = insert(:cron_job, enabled: true)
+
+    assert {:ok, _} = DistributedTaskQueue.delete_queue(queue.name)
+
+    # Otherwise the scheduler keeps enqueueing into a queue that no longer
+    # exists, producing jobs nothing can ever claim.
+    refute Repo.get!(DistributedTaskQueue.CronJob, targeting.id).enabled
+    assert Repo.get!(DistributedTaskQueue.CronJob, untouched.id).enabled
   end
 end
 

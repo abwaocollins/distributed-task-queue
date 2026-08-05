@@ -7,25 +7,37 @@ defmodule DistributedTaskQueue.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [
-      DistributedTaskQueueWeb.Telemetry,
-      DistributedTaskQueue.Repo,
-      {DNSCluster,
-       query: Application.get_env(:distributed_task_queue, :dns_cluster_query) || :ignore},
-      {Phoenix.PubSub, name: DistributedTaskQueue.PubSub},
-      {Finch, name: DistributedTaskQueue.Finch},
-      {Registry, keys: :unique, name: DistributedTaskQueue.WorkerRegistry},
-      DistributedTaskQueue.WorkerSupervisor,
-      DistributedTaskQueue.QueueCache,
-      DistributedTaskQueue.QueueBootstrapper,
-      DistributedTaskQueue.CronScheduler,
-      DistributedTaskQueueWeb.Endpoint
-    ]
+    children =
+      [
+        DistributedTaskQueueWeb.Telemetry,
+        DistributedTaskQueue.Repo,
+        {DNSCluster,
+         query: Application.get_env(:distributed_task_queue, :dns_cluster_query) || :ignore},
+        {Phoenix.PubSub, name: DistributedTaskQueue.PubSub},
+        {Finch, name: DistributedTaskQueue.Finch},
+        {Registry, keys: :unique, name: DistributedTaskQueue.WorkerRegistry},
+        DistributedTaskQueue.WorkerSupervisor,
+        DistributedTaskQueue.QueueCache,
+        DistributedTaskQueue.QueueBootstrapper
+      ] ++
+        cron_scheduler_child() ++
+        [DistributedTaskQueueWeb.Endpoint]
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: DistributedTaskQueue.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  # Safe to run on every node — CronScheduler claims each tick with a
+  # conditional UPDATE, so only one node wins. Disabled in test, where its timer
+  # would poll outside the Ecto sandbox.
+  defp cron_scheduler_child do
+    if Application.get_env(:distributed_task_queue, :start_cron_scheduler, true) do
+      [DistributedTaskQueue.CronScheduler]
+    else
+      []
+    end
   end
 
   # Tell Phoenix to update the endpoint configuration
