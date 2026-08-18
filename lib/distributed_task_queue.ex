@@ -3,7 +3,7 @@ defmodule DistributedTaskQueue do
 
   alias DistributedTaskQueue.WorkerSupervisor
   alias DistributedTaskQueue.Repo
-  alias DistributedTaskQueue.{Job, Queue, CronJob}
+  alias DistributedTaskQueue.{CronJob, CronScheduler, Job, Queue, QueueCache}
   import Ecto.Query
   require Logger
 
@@ -14,9 +14,17 @@ defmodule DistributedTaskQueue do
   end
 
   def add_queue(attrs) when is_map(attrs) do
-    %Queue{}
-    |> Queue.changeset(attrs)
-    |> Repo.insert()
+    result =
+      %Queue{}
+      |> Queue.changeset(attrs)
+      |> Repo.insert()
+
+    case result do
+      {:ok, queue} -> QueueCache.put(queue)
+      _ -> :ok
+    end
+
+    result
   end
 
   def add_queue(queue_name) when is_binary(queue_name) do
@@ -44,6 +52,92 @@ defmodule DistributedTaskQueue do
 
   def list_pending_jobs do
     Repo.all(from j in Job, where: j.status == "pending")
+  end
+
+  def list_dead_letter_jobs do
+    Repo.all(from j in Job, where: j.dead_letter == true, order_by: [desc: j.discarded_at])
+  end
+
+  def requeue_dead_letter_job(job_id) do
+    job = Repo.get(Job, job_id)
+
+    cond do
+      is_nil(job) ->
+        {:error, :not_found}
+
+      job.dead_letter != true ->
+        {:error, :not_dead_letter}
+
+      true ->
+        result =
+          job
+          |> Job.changeset(%{
+            "status" => "pending",
+            "dead_letter" => false,
+            "attempts" => 0,
+            "worker_id" => nil,
+            "error_message" => nil,
+            "discarded_at" => nil,
+            "next_retry_at" => nil,
+            "started_at" => nil,
+            "completed_at" => nil
+          })
+          |> Repo.update()
+
+        case result do
+          {:ok, updated} ->
+            ensure_queue_running(updated.queue_name)
+            {:ok, updated}
+
+          other ->
+            other
+        end
+    end
+  end
+
+  def requeue_all_dead_letter_jobs do
+    count =
+      list_dead_letter_jobs()
+      |> Enum.reduce(0, fn job, acc ->
+        case requeue_dead_letter_job(job.id) do
+          {:ok, _} -> acc + 1
+          _ -> acc
+        end
+      end)
+
+    {:ok, count}
+  end
+
+  @doc """
+  Start the queue's manager if it isn't already running, so a newly available
+  job is actually claimed.
+
+  A `QueueManager` stops itself once its queue drains, and only
+  `QueueBootstrapper` starts them at boot — so anything that makes a job
+  claimable *after* boot (a requeue, a cron firing) has to call this or the job
+  sits `pending` forever.
+
+  Idempotent: an already-running manager returns `{:error, {:already_started, _}}`,
+  which we ignore.
+
+  If the queue row does not exist there is nothing to start, and any job already
+  sitting in that queue is unclaimable — so this says so loudly rather than
+  returning `:ok` on a queue that will never drain.
+  """
+  def ensure_queue_running(queue_name) do
+    case get_queue(queue_name) do
+      nil ->
+        Logger.warning(
+          "DistributedTaskQueue: queue #{inspect(queue_name)} has no queue row, so no worker " <>
+            "was started. Jobs in it cannot be claimed until it is created."
+        )
+
+        {:error, :queue_not_found}
+
+      queue ->
+        WorkerSupervisor.start_queue(queue_name, queue.max_concurrent_jobs)
+        :ok
+    end
   end
 
   def list_jobs_filtered(filters \\ %{}) do
@@ -82,33 +176,72 @@ defmodule DistributedTaskQueue do
 
   def get_queue(queue_name), do: Repo.get_by(Queue, name: queue_name)
 
-  # Atomically claim one available job for a worker using a subquery update to avoid races.
+  @doc """
+  Claim one available job for a worker, atomically across nodes.
+
+  Select-then-update inside a transaction, rather than one
+  `UPDATE ... WHERE id IN (SELECT ... LIMIT 1 FOR UPDATE SKIP LOCKED)`.
+
+  The single-statement form looks tighter but is not safe here: Postgres may
+  evaluate that subplan once per candidate row, and because `SKIP LOCKED` makes
+  it depend on which rows are locked *at that instant*, successive evaluations
+  return different ids. Several rows then satisfy `id IN (...)` and one statement
+  marks them all `started` — the caller sees a multi-row result, reports
+  `:no_jobs`, and those jobs are stranded in `started` with nobody running them.
+  Reproduced: one claimer took two rows under a 5-way race.
+
+  Holding the lock across two statements has none of that ambiguity:
+
+    * `FOR UPDATE SKIP LOCKED` locks the row during the SELECT, so a concurrent
+      claimer steps over it and takes the next one instead of blocking. This
+      spreads N nodes across N rows rather than queueing them behind the oldest.
+      Best-effort, not guaranteed — in a simultaneous burst a claimer can come
+      back empty while work exists. That costs one poll cycle; the row stays
+      `pending` and claimable.
+
+    * The lock is held until commit, so no other transaction can touch the row
+      between the SELECT and the UPDATE. That is what makes the update safe
+      without re-stating the predicate.
+  """
   def claim_job(queue_name, worker_id) do
     now = DateTime.utc_now()
-
-    subquery =
-      from j in Job,
-        where:
-          j.queue_name == ^queue_name and is_nil(j.worker_id) and
-            ((j.status == "pending" and (is_nil(j.scheduled_at) or j.scheduled_at <= ^now)) or
-               (j.status == "retryable" and
-                  (is_nil(j.next_retry_at) or j.next_retry_at <= ^now))),
-        order_by: [asc: j.inserted_at],
-        limit: 1,
-        select: j.id
-
     attempted_by = "#{Node.self()}:#{queue_name}"
 
-    {_count, jobs} =
-      Repo.update_all(
-        from(j in Job, where: j.id in subquery(subquery), select: j),
-        set: [worker_id: worker_id, status: "started", started_at: now, attempted_by: attempted_by]
-      )
+    Repo.transaction(fn ->
+      claimable =
+        from j in Job,
+          where:
+            j.queue_name == ^queue_name and is_nil(j.worker_id) and
+              ((j.status == "pending" and (is_nil(j.scheduled_at) or j.scheduled_at <= ^now)) or
+                 (j.status == "retryable" and
+                    (is_nil(j.next_retry_at) or j.next_retry_at <= ^now))),
+          order_by: [asc: j.inserted_at],
+          limit: 1,
+          lock: "FOR UPDATE SKIP LOCKED",
+          select: j.id
 
-    case jobs do
-      [job] -> {:ok, job}
-      _ -> {:error, :no_jobs}
-    end
+      case Repo.one(claimable) do
+        nil ->
+          Repo.rollback(:no_jobs)
+
+        id ->
+          result =
+            Repo.update_all(
+              from(j in Job, where: j.id == ^id, select: j),
+              set: [
+                worker_id: worker_id,
+                status: "started",
+                started_at: now,
+                attempted_by: attempted_by
+              ]
+            )
+
+          case result do
+            {1, [job]} -> job
+            _ -> Repo.rollback(:no_jobs)
+          end
+      end
+    end)
   end
 
   def update_job_status(job_id, new_status, error_message \\ nil) do
@@ -124,7 +257,7 @@ defmodule DistributedTaskQueue do
             %{"completed_at" => DateTime.utc_now()}
 
           "discarded" ->
-            %{"discarded_at" => DateTime.utc_now(), "error_message" => error_message}
+            %{"discarded_at" => DateTime.utc_now(), "error_message" => error_message, "dead_letter" => true}
 
           "retryable" ->
             %{
@@ -222,11 +355,88 @@ defmodule DistributedTaskQueue do
     end
   end
 
+  def delete_queue(queue_name) do
+    case get_queue(queue_name) do
+      nil ->
+        {:error, :queue_not_found}
+
+      queue ->
+        # Stop the manager first so it cannot claim a job that is about to be deleted.
+        WorkerSupervisor.stop_queue(queue_name)
+
+        {:ok, disabled} =
+          Repo.transaction(fn ->
+            Repo.delete_all(from j in Job, where: j.queue_name == ^queue_name)
+
+            # Cron jobs point at a queue by name, with no FK to cascade. Left
+            # enabled they would keep enqueueing into a queue that no longer
+            # exists, producing jobs nothing can ever run. Disable rather than
+            # delete so the definition survives and can be repointed.
+            {count, _} =
+              Repo.update_all(
+                from(c in CronJob, where: c.queue_name == ^queue_name and c.enabled == true),
+                set: [
+                  enabled: false,
+                  updated_at: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+                ]
+              )
+
+            Repo.delete!(queue)
+            count
+          end)
+
+        if disabled > 0 do
+          Logger.warning(
+            "DistributedTaskQueue: disabled #{disabled} cron job(s) targeting deleted queue #{queue_name}"
+          )
+        end
+
+        QueueCache.delete(queue_name)
+        CronScheduler.reschedule()
+        {:ok, queue}
+    end
+  end
+
+  def pause_queue(queue_name) do
+    case get_queue(queue_name) do
+      nil ->
+        {:error, :queue_not_found}
+
+      queue ->
+        result = queue |> Queue.changeset(%{paused: true}) |> Repo.update()
+
+        case result do
+          {:ok, updated} -> QueueCache.put(updated)
+          _ -> :ok
+        end
+
+        result
+    end
+  end
+
+  def resume_queue(queue_name) do
+    case get_queue(queue_name) do
+      nil ->
+        {:error, :queue_not_found}
+
+      queue ->
+        result = queue |> Queue.changeset(%{paused: false}) |> Repo.update()
+
+        case result do
+          {:ok, updated} -> QueueCache.put(updated)
+          _ -> :ok
+        end
+
+        result
+    end
+  end
+
   def create_cron_job(attrs) do
     %CronJob{}
     |> CronJob.changeset(attrs)
     |> put_next_run_at()
     |> Repo.insert()
+    |> notify_scheduler()
   end
 
   def list_cron_jobs, do: Repo.all(CronJob)
@@ -238,50 +448,91 @@ defmodule DistributedTaskQueue do
     |> CronJob.changeset(attrs)
     |> put_next_run_at_if_schedule_changed()
     |> Repo.update()
+    |> notify_scheduler()
   end
 
-  def delete_cron_job(cron_job), do: Repo.delete(cron_job)
+  def delete_cron_job(cron_job), do: cron_job |> Repo.delete() |> notify_scheduler()
 
+  @doc """
+  Re-enable a cron job, restarting its schedule from now.
+
+  `next_run_at` is always recomputed: a cron that was disabled for a week has a
+  `next_run_at` far in the past, and leaving it there would fire an unintended
+  catch-up run the moment it came back.
+  """
   def enable_cron_job(cron_job) do
-    cron_job |> CronJob.changeset(%{enabled: true}) |> Repo.update()
+    cron_job
+    |> CronJob.changeset(%{enabled: true})
+    |> put_next_run_at()
+    |> Repo.update()
+    |> notify_scheduler()
   end
 
   def disable_cron_job(cron_job) do
-    cron_job |> CronJob.changeset(%{enabled: false}) |> Repo.update()
+    cron_job
+    |> CronJob.changeset(%{enabled: false})
+    |> Repo.update()
+    |> notify_scheduler()
   end
+
+  # The scheduler sleeps until the next known run, so any write that changes
+  # when something is due has to wake it — otherwise a cron due in 10s can wait
+  # for a run that is an hour out.
+  defp notify_scheduler({:ok, _} = result) do
+    CronScheduler.reschedule()
+    result
+  end
+
+  defp notify_scheduler(result), do: result
+
+  @config_replace_fields [
+    :worker_module,
+    :queue_name,
+    :cron_expression,
+    :interval_seconds,
+    :timezone,
+    :payload,
+    :max_attempts,
+    :overlap,
+    :description,
+    :updated_at
+  ]
 
   def upsert_cron_jobs_from_config do
     Application.get_env(:distributed_task_queue, :cron_jobs, [])
-    |> Enum.map(fn attrs ->
-      changeset =
-        %CronJob{}
-        |> CronJob.changeset(Map.put(attrs, :next_run_at, nil))
+    |> Enum.map(&upsert_cron_job_from_config/1)
+  end
 
-      if changeset.valid? do
-        Repo.insert(changeset,
-          on_conflict:
-            {:replace,
-             [
-               :worker_module,
-               :queue_name,
-               :cron_expression,
-               :interval_seconds,
-               :payload,
-               :max_attempts,
-               :overlap,
-               :description,
-               :next_run_at,
-               :updated_at
-             ]},
-          conflict_target: :name
-        )
-      else
-        Logger.error(
-          "DistributedTaskQueue: invalid cron_jobs config entry #{inspect(attrs)}: #{inspect(changeset.errors)}"
-        )
+  defp upsert_cron_job_from_config(attrs) do
+    changeset = CronJob.changeset(%CronJob{}, Map.put(attrs, :next_run_at, nil))
 
-        {:error, changeset}
-      end
+    if changeset.valid? do
+      existing = Repo.get_by(CronJob, name: Ecto.Changeset.get_field(changeset, :name))
+
+      # Clearing next_run_at on every boot pushes the schedule back each restart —
+      # a service that redeploys hourly could keep deferring an hourly cron past
+      # its slot forever. Only reset it when the schedule itself actually changed;
+      # a nil next_run_at is recomputed by CronScheduler right after this runs.
+      replace =
+        if schedule_changed?(existing, changeset),
+          do: [:next_run_at | @config_replace_fields],
+          else: @config_replace_fields
+
+      Repo.insert(changeset, on_conflict: {:replace, replace}, conflict_target: :name)
+    else
+      Logger.error(
+        "DistributedTaskQueue: invalid cron_jobs config entry #{inspect(attrs)}: #{inspect(changeset.errors)}"
+      )
+
+      {:error, changeset}
+    end
+  end
+
+  defp schedule_changed?(nil, _changeset), do: true
+
+  defp schedule_changed?(existing, changeset) do
+    Enum.any?([:cron_expression, :interval_seconds, :timezone], fn field ->
+      Ecto.Changeset.get_field(changeset, field) != Map.fetch!(existing, field)
     end)
   end
 

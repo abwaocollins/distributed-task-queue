@@ -70,11 +70,26 @@ config :logger, :console,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+# Time zone database used to resolve cron jobs that declare a `timezone`.
+config :elixir, :time_zone_database, Tzdata.TimeZoneDatabase
+
+# Ship with the bundled tz data instead of downloading updates at runtime.
+# Flip this to :enabled (and add a writable priv dir) if you need DST rule
+# changes without a redeploy.
+config :tzdata, :autoupdate, :disabled
+
 # Cron jobs declared here are upserted into the database each time the application starts.
 # The `name` field is the unique key — changing it creates a new row.
 # Required: name, worker_module, queue_name, payload, and one of cron_expression or interval_seconds.
-# Optional: max_attempts (default 3), overlap (default false), description.
+# Optional: max_attempts (default 3), overlap (default false), description,
+#           timezone (cron_expression only; defaults to UTC).
 # Removed entries are NOT auto-disabled — set enabled: false in the DB to stop them.
+#
+# `next_run_at` is only reset when the schedule (cron_expression / interval_seconds /
+# timezone) changes, so restarting the app does not push a pending run back.
+#
+# The scheduler polls at most once per second, so interval_seconds below ~1
+# cannot be honoured precisely.
 #
 # Example:
 #   config :distributed_task_queue, :cron_jobs, [
@@ -83,6 +98,7 @@ config :phoenix, :json_library, Jason
 #       worker_module: "MyApp.DailyReportWorker",
 #       queue_name: "default",
 #       cron_expression: "0 9 * * *",
+#       timezone: "Africa/Nairobi",
 #       payload: %{}
 #     },
 #     %{
@@ -93,7 +109,19 @@ config :phoenix, :json_library, Jason
 #       payload: %{}
 #     }
 #   ]
-config :distributed_task_queue, :cron_jobs, []
+config :distributed_task_queue, :cron_jobs, [
+  %{
+    name: "example_job_email",
+    worker_module: "DistributedTaskQueue.EmailWorker",
+    queue_name: "emails",
+    cron_expression: "*/5 * * * *",
+    timezone: "UTC",
+    payload: %{
+      sender: "Abwape",
+      endpoint: "/recruiters-emails"
+    }
+  }
+]
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.

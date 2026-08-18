@@ -52,6 +52,16 @@ defmodule DistributedTaskQueueWeb.QueueController do
     end
   end
 
+  def delete(conn, %{"name" => name}) do
+    case DistributedTaskQueue.delete_queue(name) do
+      {:ok, queue} ->
+        json(conn, %{data: queue_json(queue)})
+
+      {:error, :queue_not_found} ->
+        conn |> put_status(:not_found) |> json(%{error: "queue not found"})
+    end
+  end
+
   defp queue_json(queue) do
     %{
       id: queue.id,

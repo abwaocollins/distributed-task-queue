@@ -214,5 +214,70 @@ defmodule DistributedTaskQueue.CronJobTest do
       assert {:ok, updated} = DistributedTaskQueue.enable_cron_job(cron)
       assert updated.enabled
     end
+
+    test "enable restarts the schedule from now instead of firing a stale catch-up run" do
+      cron =
+        insert(:cron_job,
+          enabled: false,
+          interval_seconds: 300,
+          next_run_at: DateTime.add(DateTime.utc_now(), -7 * 86_400, :second)
+                       |> DateTime.truncate(:second)
+        )
+
+      assert {:ok, updated} = DistributedTaskQueue.enable_cron_job(cron)
+
+      assert DateTime.compare(updated.next_run_at, DateTime.utc_now()) == :gt
+      assert DateTime.diff(updated.next_run_at, DateTime.utc_now(), :second) in 295..305
+    end
+  end
+
+  describe "timezone" do
+    @tz_attrs Map.put(@valid_cron_attrs, :timezone, "Africa/Nairobi")
+
+    test "a known time zone is accepted alongside a cron expression" do
+      cs = CronJob.changeset(%CronJob{}, @tz_attrs)
+      assert cs.valid?
+    end
+
+    test "an unknown time zone is rejected" do
+      cs = CronJob.changeset(%CronJob{}, Map.put(@valid_cron_attrs, :timezone, "Mars/Olympus"))
+      refute cs.valid?
+      assert errors_on(cs).timezone != []
+    end
+
+    test "a time zone on an interval schedule is rejected" do
+      # An interval is relative to the previous run — there is no wall clock to
+      # shift, so a timezone here would silently do nothing.
+      cs = CronJob.changeset(%CronJob{}, Map.put(@valid_interval_attrs, :timezone, "Africa/Nairobi"))
+      refute cs.valid?
+      assert errors_on(cs).timezone != []
+    end
+
+    test "next_run_at resolves the expression in the job's zone, not UTC" do
+      nairobi = %CronJob{cron_expression: "0 9 * * *", timezone: "Africa/Nairobi"}
+      utc = %CronJob{cron_expression: "0 9 * * *", timezone: nil}
+
+      nairobi_next = CronJob.compute_next_run_at(nairobi)
+      utc_next = CronJob.compute_next_run_at(utc)
+
+      # Nairobi is UTC+3 year-round, so 09:00 local is 06:00 UTC.
+      assert nairobi_next.hour == 6
+      assert utc_next.hour == 9
+    end
+
+    test "next_run_at is always returned in UTC" do
+      next = CronJob.compute_next_run_at(%CronJob{cron_expression: "0 9 * * *", timezone: "Africa/Nairobi"})
+
+      assert next.time_zone == "Etc/UTC"
+      assert DateTime.compare(next, DateTime.utc_now()) == :gt
+    end
+
+    test "a nil timezone behaves exactly as before (UTC)" do
+      next = CronJob.compute_next_run_at(%CronJob{cron_expression: "30 14 * * *"})
+
+      assert next.time_zone == "Etc/UTC"
+      assert next.hour == 14
+      assert next.minute == 30
+    end
   end
 end

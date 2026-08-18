@@ -39,6 +39,24 @@ defmodule DistributedTaskQueueWeb.JobController do
     end
   end
 
+  def requeue(conn, %{"id" => id}) do
+    case DistributedTaskQueue.requeue_dead_letter_job(id) do
+      {:ok, job} ->
+        json(conn, %{data: job_json(job)})
+
+      {:error, :not_found} ->
+        conn |> put_status(:not_found) |> json(%{error: "not found"})
+
+      {:error, :not_dead_letter} ->
+        conn |> put_status(:unprocessable_entity) |> json(%{error: "job is not a dead-letter job"})
+    end
+  end
+
+  def requeue_all(conn, _params) do
+    {:ok, count} = DistributedTaskQueue.requeue_all_dead_letter_jobs()
+    json(conn, %{data: %{requeued: count}})
+  end
+
   defp job_json(job) do
     %{
       id: job.id,

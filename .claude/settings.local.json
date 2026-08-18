@@ -14,7 +14,11 @@
       "Skill(superpowers:requesting-code-review)",
       "Bash(psql *)",
       "Bash(grep -i \"\\\\.exs$\")",
-      "Skill(superpowers:receiving-code-review)"
+      "Skill(superpowers:receiving-code-review)",
+      "mcp__plugin_context-mode_context-mode__ctx_execute",
+      "Bash(dir /s /b priv\\\\repo\\\\migrations\\\\*.exs)",
+      "Read(//tmp/**)",
+      "mcp__plugin_context-mode_context-mode__ctx_upgrade"
     ]
   }
 }

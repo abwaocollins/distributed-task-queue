@@ -26,6 +26,11 @@ config :swoosh, :api_client, false
 # Print only warnings and errors during test
 config :logger, level: :warning
 
+# The scheduler polls the database on its own timer, which has no owner in the
+# Ecto sandbox. Tests drive it by calling CronScheduler.fire_due_crons/0
+# directly, or by starting it under start_supervised/1.
+config :distributed_task_queue, start_cron_scheduler: false
+
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
 

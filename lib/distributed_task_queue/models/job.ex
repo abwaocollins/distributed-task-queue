@@ -18,6 +18,7 @@ defmodule DistributedTaskQueue.Job do
     field(:discarded_at, :utc_datetime)
     field(:deleted_at, :utc_datetime)
     field(:attempted_by, :string)
+    field(:dead_letter, :boolean, default: false)
     belongs_to(:cron_job, DistributedTaskQueue.CronJob)
 
     timestamps()
@@ -41,6 +42,7 @@ defmodule DistributedTaskQueue.Job do
       :discarded_at,
       :deleted_at,
       :attempted_by,
+      :dead_letter,
       :cron_job_id
     ])
     |> validate_required([:payload, :queue_name, :worker_module])

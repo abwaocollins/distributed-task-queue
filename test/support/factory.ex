@@ -5,7 +5,8 @@ defmodule DistributedTaskQueue.Factory do
     %DistributedTaskQueue.Queue{
       name: sequence(:name, &"queue-#{&1}"),
       description: "Test queue",
-      max_concurrent_jobs: 3
+      max_concurrent_jobs: 3,
+      paused: false
     }
   end
 

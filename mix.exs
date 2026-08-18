@@ -66,6 +66,9 @@ defmodule DistributedTaskQueue.MixProject do
       {:ecto_sql, "~> 3.13"},
       {:postgrex, "~> 0.21"},
       {:crontab, "~> 1.1"},
+      # Time zone database, so cron expressions can be scheduled in a real zone
+      # rather than always UTC.
+      {:tzdata, "~> 1.1"},
 
       # Testing dependencies
       {:excoveralls, "~> 0.18.5", only: :test},

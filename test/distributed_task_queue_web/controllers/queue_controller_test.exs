@@ -85,4 +85,29 @@ defmodule DistributedTaskQueueWeb.QueueControllerTest do
       assert %{"error" => _} = json_response(conn, 404)
     end
   end
+
+  describe "DELETE /api/queues/:name" do
+    test "deletes an existing queue and its jobs", %{conn: conn} do
+      {:ok, queue} =
+        DistributedTaskQueue.add_queue(%{"name" => "ctrl-del-#{System.unique_integer([:positive])}"})
+
+      {:ok, _job} =
+        DistributedTaskQueue.add_job(queue.name, %{
+          "worker_module" => "DistributedTaskQueue.EmailWorker",
+          "payload" => %{}
+        })
+
+      conn = delete(conn, ~p"/api/queues/#{queue.name}")
+      assert %{"data" => data} = json_response(conn, 200)
+      assert data["name"] == queue.name
+
+      assert DistributedTaskQueue.get_queue(queue.name) == nil
+      assert DistributedTaskQueue.list_jobs_in_queue(queue.name) == []
+    end
+
+    test "returns 404 for unknown queue", %{conn: conn} do
+      conn = delete(conn, ~p"/api/queues/ghost")
+      assert %{"error" => _} = json_response(conn, 404)
+    end
+  end
 end
