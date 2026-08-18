@@ -118,12 +118,21 @@ defmodule DistributedTaskQueue do
   sits `pending` forever.
 
   Idempotent: an already-running manager returns `{:error, {:already_started, _}}`,
-  which we ignore. If the queue row is gone, there is nothing to start.
+  which we ignore.
+
+  If the queue row does not exist there is nothing to start, and any job already
+  sitting in that queue is unclaimable — so this says so loudly rather than
+  returning `:ok` on a queue that will never drain.
   """
   def ensure_queue_running(queue_name) do
     case get_queue(queue_name) do
       nil ->
-        :ok
+        Logger.warning(
+          "DistributedTaskQueue: queue #{inspect(queue_name)} has no queue row, so no worker " <>
+            "was started. Jobs in it cannot be claimed until it is created."
+        )
+
+        {:error, :queue_not_found}
 
       queue ->
         WorkerSupervisor.start_queue(queue_name, queue.max_concurrent_jobs)
@@ -167,33 +176,72 @@ defmodule DistributedTaskQueue do
 
   def get_queue(queue_name), do: Repo.get_by(Queue, name: queue_name)
 
-  # Atomically claim one available job for a worker using a subquery update to avoid races.
+  @doc """
+  Claim one available job for a worker, atomically across nodes.
+
+  Select-then-update inside a transaction, rather than one
+  `UPDATE ... WHERE id IN (SELECT ... LIMIT 1 FOR UPDATE SKIP LOCKED)`.
+
+  The single-statement form looks tighter but is not safe here: Postgres may
+  evaluate that subplan once per candidate row, and because `SKIP LOCKED` makes
+  it depend on which rows are locked *at that instant*, successive evaluations
+  return different ids. Several rows then satisfy `id IN (...)` and one statement
+  marks them all `started` — the caller sees a multi-row result, reports
+  `:no_jobs`, and those jobs are stranded in `started` with nobody running them.
+  Reproduced: one claimer took two rows under a 5-way race.
+
+  Holding the lock across two statements has none of that ambiguity:
+
+    * `FOR UPDATE SKIP LOCKED` locks the row during the SELECT, so a concurrent
+      claimer steps over it and takes the next one instead of blocking. This
+      spreads N nodes across N rows rather than queueing them behind the oldest.
+      Best-effort, not guaranteed — in a simultaneous burst a claimer can come
+      back empty while work exists. That costs one poll cycle; the row stays
+      `pending` and claimable.
+
+    * The lock is held until commit, so no other transaction can touch the row
+      between the SELECT and the UPDATE. That is what makes the update safe
+      without re-stating the predicate.
+  """
   def claim_job(queue_name, worker_id) do
     now = DateTime.utc_now()
-
-    subquery =
-      from j in Job,
-        where:
-          j.queue_name == ^queue_name and is_nil(j.worker_id) and
-            ((j.status == "pending" and (is_nil(j.scheduled_at) or j.scheduled_at <= ^now)) or
-               (j.status == "retryable" and
-                  (is_nil(j.next_retry_at) or j.next_retry_at <= ^now))),
-        order_by: [asc: j.inserted_at],
-        limit: 1,
-        select: j.id
-
     attempted_by = "#{Node.self()}:#{queue_name}"
 
-    {_count, jobs} =
-      Repo.update_all(
-        from(j in Job, where: j.id in subquery(subquery), select: j),
-        set: [worker_id: worker_id, status: "started", started_at: now, attempted_by: attempted_by]
-      )
+    Repo.transaction(fn ->
+      claimable =
+        from j in Job,
+          where:
+            j.queue_name == ^queue_name and is_nil(j.worker_id) and
+              ((j.status == "pending" and (is_nil(j.scheduled_at) or j.scheduled_at <= ^now)) or
+                 (j.status == "retryable" and
+                    (is_nil(j.next_retry_at) or j.next_retry_at <= ^now))),
+          order_by: [asc: j.inserted_at],
+          limit: 1,
+          lock: "FOR UPDATE SKIP LOCKED",
+          select: j.id
 
-    case jobs do
-      [job] -> {:ok, job}
-      _ -> {:error, :no_jobs}
-    end
+      case Repo.one(claimable) do
+        nil ->
+          Repo.rollback(:no_jobs)
+
+        id ->
+          result =
+            Repo.update_all(
+              from(j in Job, where: j.id == ^id, select: j),
+              set: [
+                worker_id: worker_id,
+                status: "started",
+                started_at: now,
+                attempted_by: attempted_by
+              ]
+            )
+
+          case result do
+            {1, [job]} -> job
+            _ -> Repo.rollback(:no_jobs)
+          end
+      end
+    end)
   end
 
   def update_job_status(job_id, new_status, error_message \\ nil) do

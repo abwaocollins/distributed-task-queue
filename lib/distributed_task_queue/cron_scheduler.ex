@@ -1,7 +1,7 @@
 defmodule DistributedTaskQueue.CronScheduler do
   use GenServer
 
-  alias DistributedTaskQueue.{CronJob, Job, QueueCache, Repo}
+  alias DistributedTaskQueue.{CronJob, Job, Queue, QueueCache, Repo}
   import Ecto.Query
   require Logger
 
@@ -30,6 +30,24 @@ defmodule DistributedTaskQueue.CronScheduler do
       nil -> :ok
       pid -> GenServer.cast(pid, :reschedule)
     end
+  end
+
+  @doc """
+  Enabled cron jobs whose target queue does not exist, as `{cron_name, queue_name}`.
+
+  Such a cron can never run: `add_job/2` accepts any queue name, but nothing
+  starts a manager for a queue with no row, so the job would sit `pending`
+  forever. Called at boot to surface the misconfiguration while you are still
+  looking at the logs; also useful from a health check.
+  """
+  def missing_queues do
+    Repo.all(
+      from c in CronJob,
+        left_join: q in Queue,
+        on: q.name == c.queue_name,
+        where: c.enabled == true and is_nil(q.name),
+        select: {c.name, c.queue_name}
+    )
   end
 
   def fire_due_crons do
@@ -62,6 +80,7 @@ defmodule DistributedTaskQueue.CronScheduler do
     try do
       DistributedTaskQueue.upsert_cron_jobs_from_config()
       initialize_null_next_run_ats()
+      report_missing_queues()
     rescue
       e ->
         Logger.error("CronScheduler: seed_and_init failed: #{Exception.message(e)}")
@@ -83,6 +102,13 @@ defmodule DistributedTaskQueue.CronScheduler do
 
   defp maybe_fire(cron) do
     cond do
+      # Enqueueing into a queue that does not exist produces a job nothing can
+      # ever claim — and with overlap: false that one job blocks the cron
+      # permanently. Skipping instead keeps the cron recoverable: create the
+      # queue and the next tick fires on its own.
+      queue_missing?(cron.queue_name) ->
+        skip(cron, :queue_missing)
+
       queue_paused?(cron.queue_name) ->
         skip(cron, :queue_paused)
 
@@ -174,7 +200,7 @@ defmodule DistributedTaskQueue.CronScheduler do
   # A skipped tick deliberately leaves next_run_at in the past so the cron fires
   # as soon as the blocker clears, rather than waiting for its next slot.
   defp skip(cron, reason) do
-    Logger.info("CronScheduler: skipped cron #{cron.id} (#{cron.name}): #{reason}")
+    log_skip(reason, cron)
 
     :telemetry.execute([:dtq, :cron, :skipped], %{count: 1}, %{
       cron_job_id: cron.id,
@@ -184,6 +210,31 @@ defmodule DistributedTaskQueue.CronScheduler do
     })
 
     :ok
+  end
+
+  # A missing queue is a misconfiguration that will never resolve on its own,
+  # so it is louder than the operational skips.
+  defp log_skip(:queue_missing, cron) do
+    Logger.warning(
+      "CronScheduler: cron #{cron.id} (#{cron.name}) targets queue #{inspect(cron.queue_name)}, " <>
+        "which does not exist — it will not run until that queue is created"
+    )
+  end
+
+  defp log_skip(reason, cron) do
+    Logger.info("CronScheduler: skipped cron #{cron.id} (#{cron.name}): #{reason}")
+  end
+
+  defp queue_missing?(queue_name), do: is_nil(DistributedTaskQueue.get_queue(queue_name))
+
+  defp report_missing_queues do
+    Enum.each(missing_queues(), fn {cron_name, queue_name} ->
+      Logger.error(
+        "CronScheduler: cron #{inspect(cron_name)} targets queue #{inspect(queue_name)}, " <>
+          "which does not exist. It will not run until the queue is created — " <>
+          "DistributedTaskQueue.add_queue(#{inspect(queue_name)})"
+      )
+    end)
   end
 
   defp queue_paused?(queue_name) do

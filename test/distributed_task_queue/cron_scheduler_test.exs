@@ -205,6 +205,67 @@ defmodule DistributedTaskQueue.CronSchedulerTest do
     end
   end
 
+  describe "missing target queue" do
+    # Regression: a cron pointed at a queue with no row enqueued a job nothing
+    # could claim, and with overlap: false that one pending job blocked the cron
+    # forever. It fired exactly once, then logged `previous_run_active` on every
+    # poll for good.
+    test "does not enqueue when the target queue does not exist" do
+      cron = insert(:cron_job, queue_name: "no-such-queue", next_run_at: due_at_now())
+
+      CronScheduler.fire_due_crons()
+
+      assert Repo.all(from j in Job, where: j.cron_job_id == ^cron.id) == []
+    end
+
+    test "leaves the schedule unclaimed so it recovers once the queue is created" do
+      cron = insert(:cron_job, queue_name: "late-queue", overlap: true, next_run_at: due_at_now())
+
+      CronScheduler.fire_due_crons()
+      assert Repo.get!(CronJob, cron.id).next_run_at == cron.next_run_at
+
+      {:ok, _} = DistributedTaskQueue.add_queue(%{"name" => "late-queue"})
+      on_exit(fn -> QueueCache.delete("late-queue") end)
+
+      CronScheduler.fire_due_crons()
+
+      assert Repo.aggregate(from(j in Job, where: j.cron_job_id == ^cron.id), :count) == 1
+    end
+
+    test "reports the reason as queue_missing rather than a generic skip" do
+      handler_id = "cron-missing-q-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:dtq, :cron, :skipped],
+        fn _event, _measurements, meta, _ -> send(test_pid, {:skipped, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      insert(:cron_job, queue_name: "no-such-queue", next_run_at: due_at_now())
+
+      CronScheduler.fire_due_crons()
+
+      assert_receive {:skipped, %{reason: :queue_missing}}
+    end
+
+    test "missing_queues/0 lists enabled crons whose queue is absent" do
+      orphan = insert(:cron_job, queue_name: "vanished", enabled: true)
+      _disabled = insert(:cron_job, queue_name: "also-vanished", enabled: false)
+      healthy = insert(:cron_job)
+
+      missing = CronScheduler.missing_queues()
+
+      assert {orphan.name, "vanished"} in missing
+      refute {healthy.name, healthy.queue_name} in missing
+      # A disabled cron is not going to run anyway; do not add noise for it.
+      refute Enum.any?(missing, fn {_, queue} -> queue == "also-vanished" end)
+    end
+  end
+
   describe "observability" do
     test "emits a skipped event naming why the tick was dropped" do
       handler_id = "cron-skip-#{System.unique_integer([:positive])}"

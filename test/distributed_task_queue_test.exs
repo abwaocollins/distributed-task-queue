@@ -289,6 +289,11 @@ defmodule DistributedTaskQueue.RequeueDeadLetterTest do
     assert [{_pid, _}] = Registry.lookup(DistributedTaskQueue.WorkerRegistry, queue.name)
   end
 
+  test "ensure_queue_running reports a missing queue instead of silently doing nothing" do
+    # Returning :ok here is what let a cron enqueue into a void unnoticed.
+    assert DistributedTaskQueue.ensure_queue_running("ghost-queue") == {:error, :queue_not_found}
+  end
+
   test "requeue_dead_letter_job returns error for unknown job" do
     assert DistributedTaskQueue.requeue_dead_letter_job(0) == {:error, :not_found}
   end

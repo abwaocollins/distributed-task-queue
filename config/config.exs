@@ -109,7 +109,19 @@ config :tzdata, :autoupdate, :disabled
 #       payload: %{}
 #     }
 #   ]
-config :distributed_task_queue, :cron_jobs, []
+config :distributed_task_queue, :cron_jobs, [
+  %{
+    name: "example_job_email",
+    worker_module: "DistributedTaskQueue.EmailWorker",
+    queue_name: "emails",
+    cron_expression: "*/5 * * * *",
+    timezone: "UTC",
+    payload: %{
+      sender: "Abwape",
+      endpoint: "/recruiters-emails"
+    }
+  }
+]
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
