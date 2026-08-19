@@ -109,16 +109,18 @@ defmodule DistributedTaskQueue.CronJob do
 
   defp validate_cron_expression(changeset) do
     if changeset.valid? do
-      case get_field(changeset, :cron_expression) do
-        nil -> changeset
-        expr ->
-          case Crontab.CronExpression.Parser.parse(expr) do
-            {:ok, _} -> changeset
-            {:error, _} -> add_error(changeset, :cron_expression, "is not a valid cron expression")
-          end
-      end
+      validate_parsable_cron(changeset, get_field(changeset, :cron_expression))
     else
       changeset
+    end
+  end
+
+  defp validate_parsable_cron(changeset, nil), do: changeset
+
+  defp validate_parsable_cron(changeset, expr) do
+    case Crontab.CronExpression.Parser.parse(expr) do
+      {:ok, _} -> changeset
+      {:error, _} -> add_error(changeset, :cron_expression, "is not a valid cron expression")
     end
   end
 

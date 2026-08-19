@@ -1,0 +1,4 @@
+# The repository already stores every text file with LF. Pinning eol=lf keeps
+# Windows checkouts from rewriting them to CRLF, which made Credo's line-ending
+# consistency check fire locally but never in CI.
+* text=auto eol=lf

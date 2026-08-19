@@ -1,6 +1,8 @@
 defmodule DistributedTaskQueueWeb.QueueController do
   use DistributedTaskQueueWeb, :controller
 
+  alias DistributedTaskQueueWeb.ChangesetErrors
+
   def index(conn, _params) do
     queues = DistributedTaskQueue.list_queues()
     json(conn, %{data: Enum.map(queues, &queue_json/1)})
@@ -16,7 +18,7 @@ defmodule DistributedTaskQueueWeb.QueueController do
       {:error, changeset} ->
         conn
         |> put_status(:unprocessable_entity)
-        |> json(%{error: format_errors(changeset)})
+        |> json(%{error: ChangesetErrors.format(changeset)})
     end
   end
 
@@ -70,15 +72,5 @@ defmodule DistributedTaskQueueWeb.QueueController do
       max_concurrent_jobs: queue.max_concurrent_jobs,
       inserted_at: queue.inserted_at
     }
-  end
-
-  defp format_errors(changeset) do
-    Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->
-      Enum.reduce(opts, msg, fn {key, value}, acc ->
-        String.replace(acc, "%{#{key}}", to_string(value))
-      end)
-    end)
-    |> Enum.map(fn {field, messages} -> "#{field} #{Enum.join(messages, ", ")}" end)
-    |> Enum.join("; ")
   end
 end

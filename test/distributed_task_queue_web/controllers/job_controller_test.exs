@@ -16,7 +16,7 @@ defmodule DistributedTaskQueueWeb.JobControllerTest do
       insert(:job)
       conn = get(conn, ~p"/api/jobs?queue=target")
       assert %{"data" => jobs} = json_response(conn, 200)
-      assert length(jobs) >= 1
+      refute Enum.empty?(jobs)
       assert Enum.all?(jobs, fn j -> j["queue_name"] == "target" end)
     end
 
@@ -25,7 +25,7 @@ defmodule DistributedTaskQueueWeb.JobControllerTest do
       insert(:job, status: "completed")
       conn = get(conn, ~p"/api/jobs?status=pending")
       assert %{"data" => jobs} = json_response(conn, 200)
-      assert length(jobs) >= 1
+      refute Enum.empty?(jobs)
       assert Enum.all?(jobs, fn j -> j["status"] == "pending" end)
     end
 

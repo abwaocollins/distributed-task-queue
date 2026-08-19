@@ -1,6 +1,8 @@
 defmodule DistributedTaskQueueWeb.JobController do
   use DistributedTaskQueueWeb, :controller
 
+  alias DistributedTaskQueueWeb.ChangesetErrors
+
   def index(conn, params) do
     jobs = DistributedTaskQueue.list_jobs_filtered(params)
     json(conn, %{data: Enum.map(jobs, &job_json/1)})
@@ -22,7 +24,7 @@ defmodule DistributedTaskQueueWeb.JobController do
       {:error, changeset} ->
         conn
         |> put_status(:unprocessable_entity)
-        |> json(%{error: format_errors(changeset)})
+        |> json(%{error: ChangesetErrors.format(changeset)})
     end
   end
 
@@ -80,14 +82,4 @@ defmodule DistributedTaskQueueWeb.JobController do
 
   defp format_naive_dt(nil), do: nil
   defp format_naive_dt(dt), do: NaiveDateTime.to_iso8601(dt)
-
-  defp format_errors(changeset) do
-    Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->
-      Enum.reduce(opts, msg, fn {key, value}, acc ->
-        String.replace(acc, "%{#{key}}", to_string(value))
-      end)
-    end)
-    |> Enum.map(fn {field, messages} -> "#{field} #{Enum.join(messages, ", ")}" end)
-    |> Enum.join("; ")
-  end
 end

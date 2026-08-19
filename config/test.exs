@@ -2,11 +2,14 @@ import Config
 
 # db configs
 # Configure your database
+# CI (and anyone whose local Postgres differs) can point the test repo elsewhere
+# with DATABASE_URL. When unset, `url: nil` is ignored and the defaults below apply.
 config :distributed_task_queue, DistributedTaskQueue.Repo,
   username: "postgres",
   password: "password",
   hostname: "localhost",
   database: "distributed_task_queue_test",
+  url: System.get_env("DATABASE_URL"),
   stacktrace: true,
   pool: Ecto.Adapters.SQL.Sandbox
 

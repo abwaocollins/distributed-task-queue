@@ -208,40 +208,45 @@ defmodule DistributedTaskQueue do
     attempted_by = "#{Node.self()}:#{queue_name}"
 
     Repo.transaction(fn ->
-      claimable =
-        from j in Job,
-          where:
-            j.queue_name == ^queue_name and is_nil(j.worker_id) and
-              ((j.status == "pending" and (is_nil(j.scheduled_at) or j.scheduled_at <= ^now)) or
-                 (j.status == "retryable" and
-                    (is_nil(j.next_retry_at) or j.next_retry_at <= ^now))),
-          order_by: [asc: j.inserted_at],
-          limit: 1,
-          lock: "FOR UPDATE SKIP LOCKED",
-          select: j.id
-
-      case Repo.one(claimable) do
-        nil ->
-          Repo.rollback(:no_jobs)
-
-        id ->
-          result =
-            Repo.update_all(
-              from(j in Job, where: j.id == ^id, select: j),
-              set: [
-                worker_id: worker_id,
-                status: "started",
-                started_at: now,
-                attempted_by: attempted_by
-              ]
-            )
-
-          case result do
-            {1, [job]} -> job
-            _ -> Repo.rollback(:no_jobs)
-          end
+      case Repo.one(claimable_job_query(queue_name, now)) do
+        nil -> Repo.rollback(:no_jobs)
+        id -> mark_claimed(id, worker_id, attempted_by, now)
       end
     end)
+  end
+
+  defp claimable_job_query(queue_name, now) do
+    from j in Job,
+      where:
+        j.queue_name == ^queue_name and is_nil(j.worker_id) and
+          ((j.status == "pending" and (is_nil(j.scheduled_at) or j.scheduled_at <= ^now)) or
+             (j.status == "retryable" and
+                (is_nil(j.next_retry_at) or j.next_retry_at <= ^now))),
+      order_by: [asc: j.inserted_at],
+      limit: 1,
+      lock: "FOR UPDATE SKIP LOCKED",
+      select: j.id
+  end
+
+  # The SELECT already locked this row, so the UPDATE does not need to re-state
+  # the claim predicate. Anything other than a single updated row means the lock
+  # did not hold, so treat it as "nothing claimed" rather than guessing.
+  defp mark_claimed(id, worker_id, attempted_by, now) do
+    result =
+      Repo.update_all(
+        from(j in Job, where: j.id == ^id, select: j),
+        set: [
+          worker_id: worker_id,
+          status: "started",
+          started_at: now,
+          attempted_by: attempted_by
+        ]
+      )
+
+    case result do
+      {1, [job]} -> job
+      _ -> Repo.rollback(:no_jobs)
+    end
   end
 
   def update_job_status(job_id, new_status, error_message \\ nil) do
