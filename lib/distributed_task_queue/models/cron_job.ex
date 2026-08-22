@@ -32,6 +32,7 @@ defmodule DistributedTaskQueue.CronJob do
       :overlap, :enabled, :last_run_at, :next_run_at
     ])
     |> validate_required([:name, :worker_module, :queue_name, :payload])
+    |> DistributedTaskQueue.WorkerModuleName.validate(:worker_module)
     |> unique_constraint(:name)
     |> validate_number(:interval_seconds, greater_than: 0)
     |> validate_number(:max_attempts, greater_than: 0)

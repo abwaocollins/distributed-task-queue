@@ -46,5 +46,6 @@ defmodule DistributedTaskQueue.Job do
       :cron_job_id
     ])
     |> validate_required([:payload, :queue_name, :worker_module])
+    |> DistributedTaskQueue.WorkerModuleName.validate(:worker_module)
   end
 end
