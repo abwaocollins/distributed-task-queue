@@ -402,6 +402,25 @@ defmodule DistributedTaskQueue do
     end
   end
 
+  @doc """
+  Update a queue's description or concurrency.
+
+  A running `QueueManager` sized its worker slots when it started, so a new
+  `max_concurrent_jobs` takes effect the next time the manager starts (it stops
+  on its own once the queue drains). Restarting it here would kill in-flight
+  workers and strand their jobs in `started`.
+  """
+  def update_queue(%Queue{} = queue, attrs) do
+    result = queue |> Queue.update_changeset(attrs) |> Repo.update()
+
+    case result do
+      {:ok, updated} -> QueueCache.put(updated)
+      _ -> :ok
+    end
+
+    result
+  end
+
   def pause_queue(queue_name) do
     case get_queue(queue_name) do
       nil ->

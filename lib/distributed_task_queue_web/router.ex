@@ -17,7 +17,23 @@ defmodule DistributedTaskQueueWeb.Router do
   scope "/", DistributedTaskQueueWeb do
     pipe_through :browser
 
-    get "/", PageController, :home
+    live_session :console, on_mount: DistributedTaskQueueWeb.LiveRefresh do
+      live "/", OverviewLive, :index
+
+      live "/queues", QueuesLive, :index
+      live "/queues/new", QueuesLive, :new
+      live "/queues/:name/edit", QueuesLive, :edit
+
+      live "/jobs", JobsLive, :index
+      live "/jobs/new", JobsLive, :new
+      live "/jobs/:id", JobLive, :show
+
+      live "/dead-letter", DeadLetterLive, :index
+
+      live "/cron", CronLive, :index
+      live "/cron/new", CronLive, :new
+      live "/cron/:id/edit", CronLive, :edit
+    end
   end
 
   scope "/api", DistributedTaskQueueWeb do
@@ -25,7 +41,7 @@ defmodule DistributedTaskQueueWeb.Router do
 
     resources "/queues", QueueController, only: [:index, :create]
     post "/queues/:name/start", QueueController, :start
-    post "/queues/:name/stop",  QueueController, :stop
+    post "/queues/:name/stop", QueueController, :stop
     delete "/queues/:name", QueueController, :delete
 
     post "/jobs/:id/requeue", JobController, :requeue

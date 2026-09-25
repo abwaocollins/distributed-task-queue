@@ -26,6 +26,11 @@ defmodule DistributedTaskQueue.Application do
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: DistributedTaskQueue.Supervisor]
+
+    # Attached before the tree starts so the first jobs QueueBootstrapper runs
+    # are already bridged onto PubSub for the dashboard.
+    DistributedTaskQueue.Events.attach()
+
     Supervisor.start_link(children, opts)
   end
 

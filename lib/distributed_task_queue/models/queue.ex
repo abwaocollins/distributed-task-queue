@@ -15,6 +15,18 @@ defmodule DistributedTaskQueue.Queue do
     queue
     |> cast(attrs, [:name, :description, :max_concurrent_jobs, :paused])
     |> validate_required([:name])
+    |> validate_number(:max_concurrent_jobs, greater_than: 0)
     |> unique_constraint(:name)
+  end
+
+  @doc """
+  Changes allowed on an existing queue. The name is fixed: jobs and cron jobs
+  reference a queue by name, so renaming would orphan them.
+  """
+  def update_changeset(queue, attrs) do
+    queue
+    |> cast(attrs, [:description, :max_concurrent_jobs])
+    |> validate_required([:max_concurrent_jobs])
+    |> validate_number(:max_concurrent_jobs, greater_than: 0)
   end
 end

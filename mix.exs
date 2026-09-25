@@ -42,9 +42,12 @@ defmodule DistributedTaskQueue.MixProject do
     [
       {:phoenix, "~> 1.7.21"},
       {:phoenix_html, "~> 4.1"},
+      {:phoenix_ecto, "~> 4.5"},
       {:phoenix_live_reload, "~> 1.2", only: :dev},
       {:phoenix_live_view, "~> 1.0"},
       {:floki, ">= 0.30.0", only: :test},
+      # Required by Phoenix.LiveViewTest from LiveView 1.1 on.
+      {:lazy_html, ">= 0.1.0", only: :test},
       {:phoenix_live_dashboard, "~> 0.8.3"},
       {:esbuild, "~> 0.8", runtime: Mix.env() == :dev},
       {:tailwind, "~> 0.2.0", runtime: Mix.env() == :dev},

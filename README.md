@@ -261,6 +261,8 @@ mix setup       # deps, database create + migrate, assets
 mix phx.server  # http://localhost:4000
 ```
 
+`/` is a live web console: an overview of anything that needs attention, queues (create, edit, pause, delete), jobs (filter by queue, status, errors or text; create; inspect; delete), the dead-letter queue (requeue, delete) and cron jobs (create, edit, enable/disable, delete). It updates from the `dtq.*` telemetry events over PubSub, so it follows jobs run on any connected node.
+
 `/dev/dashboard` exposes LiveDashboard in development, including the `dtq.*` metrics above.
 
 ## Known limitations
