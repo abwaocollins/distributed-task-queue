@@ -2,7 +2,7 @@
 
 **Background job processing that keeps running when a machine dies.**
 
-Jobs are enqueued into PostgreSQL, claimed by worker processes across any number of BEAM nodes, retried with exponential backoff, and routed to a dead-letter queue once they exhaust their attempts. Scheduling is built in — cron expressions with real timezone and DST handling, or fixed intervals.
+Jobs are enqueued into PostgreSQL, claimed by worker processes across any number of BEAM nodes, retried with exponential backoff, and routed to a dead-letter queue once they exhaust their attempts. Scheduling is built in — cron expressions with real timezone and DST handling, or fixed intervals. A live web console shows what every queue is doing, surfaces failures, and lets you manage queues, jobs, the dead-letter queue and cron schedules without touching the API.
 
 [![CI](https://github.com/abwaocollins/distributed-task-queue/actions/workflows/ci.yml/badge.svg)](https://github.com/abwaocollins/distributed-task-queue/actions/workflows/ci.yml)
 ![Elixir](https://img.shields.io/badge/elixir-~%3E%201.15-purple)
@@ -56,6 +56,8 @@ flowchart TB
 | `QueueBootstrapper` | Starts a manager for every queue row at boot, via `handle_continue`. |
 | `CronScheduler` | Self-scheduling poll loop. Runs on **every** node — safety comes from atomic tick claiming, not from being a singleton. |
 | `Worker` | The behaviour user code implements, plus the dispatch trust boundary. |
+| `Events` | Bridges the `[:dtq, :job, …]` / `[:dtq, :cron, …]` telemetry events onto `Phoenix.PubSub`, so the console hears about work done on any node. |
+| Web console | LiveView pages under one `live_session`, reading through a bounded read model (`Dashboard`) and kept current by a shared `on_mount` hook (`LiveRefresh`). |
 
 ### How a job flows
 
@@ -75,12 +77,38 @@ flowchart TB
 | **Exponential backoff** | `min(15 × 2^attempts, 3600)` seconds, capped at one hour |
 | **Dead-letter queue** | Exhausted jobs are retained and queryable; requeue one or all |
 | **Queue pause / resume** | Stops claiming; in-flight jobs finish; the manager stays alive |
-| **Runtime queue management** | Create, start, stop, and delete queues without a deploy |
+| **Runtime queue management** | Create, edit, pause, and delete queues without a deploy, from the console or the API |
 | **Cron scheduling** | Cron expressions or fixed intervals, with timezone and DST handling |
 | **Overlap policy** | Per-cron control over whether a run may start while the previous one is still going |
 | **Crash isolation** | A worker crash returns its concurrency slot; it cannot take down the queue |
 | **Future scheduling** | `scheduled_at` for one-off delayed jobs |
-| **Telemetry** | `[:dtq, :job, …]` and `[:dtq, :cron, …]` events, wired into LiveDashboard |
+| **Telemetry** | `[:dtq, :job, …]` and `[:dtq, :cron, …]` events, wired into LiveDashboard and the console |
+| **Web console** | Live overview, filterable job list, per-job detail, and create / edit / delete for queues, jobs and cron jobs |
+
+## Web console
+
+`mix phx.server` serves a LiveView console at `/`. Every page updates live as jobs run.
+
+| Page | What it is for |
+|---|---|
+| **Overview** `/` | Job totals (each links to the filtered list), recent failures with their errors, the next cron runs, and a *Needs attention* panel. |
+| **Queues** `/queues` | Depth, in-flight work against concurrency, retrying and dead counts per queue. Create, edit, pause/resume, delete. |
+| **Jobs** `/jobs` | Filter by queue, status or "has an error", or search by job id, worker or error text. Filters live in the URL, so a filtered view can be bookmarked or linked. Create a job with a JSON payload; delete. |
+| **Job detail** `/jobs/:id` | Full error message, payload, attempt count, which node claimed it, and a timeline from enqueue to completion or discard. Requeue if dead-lettered. |
+| **Dead letter** `/dead-letter` | Exhausted jobs with their last error, filterable by queue or text. Requeue one, requeue exactly the jobs the filter shows, or delete. |
+| **Cron** `/cron` | Schedules with next and last run. Create and edit with a cron expression plus timezone, or a fixed interval; enable/disable; delete. |
+
+**Errors are shown where they happen, not only in logs.** The *Needs attention* panel flags crons pointing at a queue that does not exist (with a one-click fix), jobs marked running on a queue with no manager on this node (possible orphans), paused queues with work waiting, and dead-lettered jobs. The nav carries a dead-letter count, every job row shows its last error, and forms validate inline, including JSON payloads, module names, cron expressions and timezones.
+
+**How it stays live.** `DistributedTaskQueue.Events` forwards the job and cron telemetry events to PubSub, which reaches every connected node. Each page coalesces them: the first event schedules a refresh 300 ms later and any that arrive in between ride along, so a burst of completions costs one reload. The delay also avoids a stale read, since a worker emits `:completed` just *before* it writes the new status. A 5-second tick covers what telemetry does not report, such as jobs enqueued through the API.
+
+A few behaviours worth knowing:
+
+- **Concurrency changes apply the next time the queue's manager starts** (it stops on its own once the queue drains). Restarting it on save would kill jobs in flight.
+- **Cron jobs declared in config are re-applied at every boot**, so console edits to them last until the next restart. The console labels them `config` and says so in the edit form.
+- **Jobs created from the console start their queue's manager.** The API path does not yet; see [Known limitations](#known-limitations).
+
+`/dev/dashboard` exposes LiveDashboard in development, with the `dtq.*` metrics alongside the BEAM's own.
 
 ## Defining a worker
 
@@ -111,7 +139,7 @@ Rejected dispatches fail the job with an explicit reason rather than crashing th
 
 ## Enqueuing work
 
-In Elixir:
+From the console, use **New job** on the Jobs page. In Elixir:
 
 ```elixir
 DistributedTaskQueue.add_queue(%{name: "emails", max_concurrent_jobs: 10})
@@ -239,7 +267,7 @@ Telemetry events are emitted for every job and cron transition and registered as
 | `[:dtq, :cron, :skipped]` | | …plus `reason` (`:queue_paused`, `:previous_run_active`, `:queue_missing`) |
 | `[:dtq, :cron, :failed]` | | …plus `reason` |
 
-`:skipped` carrying a reason is what turned the cron incident above from invisible into diagnosable.
+`:skipped` carrying a reason is what turned the cron incident above from invisible into diagnosable. The same events drive the [web console](#web-console), bridged onto PubSub.
 
 ## Testing
 
@@ -250,7 +278,7 @@ mix credo             # linting
 mix dialyzer          # type checking
 ```
 
-Roughly 2,000 lines of tests against 2,800 lines of application code, covering controllers, the bootstrapper, cron scheduling and overlap policy, the ETS cache, pause semantics, worker dispatch and its security boundary, and a dedicated concurrency suite that drives real parallel connections. CI runs the suite against PostgreSQL on every push and pull request.
+175 tests across 15 files (about 2,400 lines), covering the API controllers, every console page (filters, create/edit/delete, inline validation, live refresh from telemetry), the bootstrapper, cron scheduling and overlap policy, the ETS cache, pause semantics, worker dispatch and its security boundary, and a dedicated concurrency suite that drives real parallel connections. CI runs the suite against PostgreSQL on every push and pull request.
 
 ## Running locally
 
@@ -261,16 +289,14 @@ mix setup       # deps, database create + migrate, assets
 mix phx.server  # http://localhost:4000
 ```
 
-`/` is a live web console: an overview of anything that needs attention, queues (create, edit, pause, delete), jobs (filter by queue, status, errors or text; create; inspect; delete), the dead-letter queue (requeue, delete) and cron jobs (create, edit, enable/disable, delete). It updates from the `dtq.*` telemetry events over PubSub, so it follows jobs run on any connected node.
-
-`/dev/dashboard` exposes LiveDashboard in development, including the `dtq.*` metrics above.
+Then open http://localhost:4000 for the [web console](#web-console).
 
 ## Known limitations
 
 Deliberately listed, because they are the questions worth asking:
 
-- **The HTTP API has no authentication.** Fine behind a private network; not fine on the public internet.
-- **Orphaned jobs are not reaped.** A job whose node dies mid-run stays `started` indefinitely. Deciding a job is dead needs a lease, a heartbeat, or a max-runtime threshold — the telemetry above makes the stall visible, but nothing clears it yet.
-- **Enqueuing does not verify the queue is running.** The cron path guards this; `POST /api/jobs` does not, and inherits the wedge described above.
+- **Neither the HTTP API nor the web console has authentication.** Both can create, change and delete queues, jobs and cron jobs. Fine behind a private network; not fine on the public internet.
+- **Orphaned jobs are not reaped.** A job whose node dies mid-run stays `started` indefinitely. Deciding a job is dead needs a lease, a heartbeat, or a max-runtime threshold — the telemetry above and the console's *Needs attention* panel make the stall visible, but nothing clears it yet.
+- **Enqueuing through the API does not verify the queue is running.** The cron path and the console guard this; `POST /api/jobs` does not, and inherits the wedge described above.
 - **Clustering is configured but not yet demonstrated.** `DNSCluster` is wired into the supervision tree and defaults to `:ignore`. Multi-node coordination is correct by construction — every claim path is a row contention — but the deployed proof is still to come.
 - **Throughput has a ceiling.** Coordinating through row locks means the database is the bottleneck under a single hot queue. That is the accepted cost of not running a broker.
