@@ -11,10 +11,53 @@ defmodule DistributedTaskQueue.QueueManager do
     )
   end
 
+  @doc """
+  Ask a running manager to look for work now instead of at its next poll.
+
+  Returns `:ok`, or `:not_running` if the manager is gone — including one that
+  was already on its way out because it had found its queue empty. That case is
+  why this is a call rather than a plain `send/2`: a message sent to a manager
+  that is stopping is silently lost, and the job that prompted it would sit
+  `pending` until something else woke the queue.
+  """
+  def wake(pid) do
+    GenServer.call(pid, :wake)
+  catch
+    :exit, _ -> :not_running
+  end
+
+  @doc """
+  Change the number of jobs this manager runs at once, without restarting it.
+
+  Growing frees new slots immediately. Shrinking never interrupts a running job:
+  slots above the new limit are retired as their jobs finish.
+  """
+  def resize(queue_name, max) do
+    case Registry.lookup(DistributedTaskQueue.WorkerRegistry, queue_name) do
+      [{pid, _}] -> GenServer.cast(pid, {:resize, max})
+      [] -> :ok
+    end
+  end
+
   def init(%{max: max} = state) do
     Process.flag(:trap_exit, true)
-    schedule_poll()
-    {:ok, Map.merge(state, %{free_slots: MapSet.new(1..max), task_slots: %{}})}
+    # Look for work straight away. The manager is started because something
+    # just became claimable; waiting a full poll interval only delays it.
+    send(self(), :poll)
+    {:ok, Map.merge(state, %{free_slots: MapSet.new(1..max//1), task_slots: %{}})}
+  end
+
+  def handle_call(:wake, _from, state) do
+    send(self(), :poll)
+    {:reply, :ok, state}
+  end
+
+  def handle_cast({:resize, max}, state) do
+    busy = state.task_slots |> Map.keys() |> MapSet.new()
+    free_slots = MapSet.difference(MapSet.new(1..max//1), busy)
+
+    send(self(), :poll)
+    {:noreply, %{state | max: max, free_slots: free_slots}}
   end
 
   def handle_info(:poll, state) do
@@ -32,7 +75,7 @@ defmodule DistributedTaskQueue.QueueManager do
 
     {:noreply, %{state |
       running: state.running - 1,
-      free_slots: MapSet.put(state.free_slots, slot),
+      free_slots: return_slot(state.free_slots, slot, state.max),
       task_slots: Map.delete(state.task_slots, slot)
     }}
   end
@@ -49,7 +92,7 @@ defmodule DistributedTaskQueue.QueueManager do
         send(self(), :poll)
         %{state |
           running: max(0, state.running - 1),
-          free_slots: MapSet.put(state.free_slots, slot),
+          free_slots: return_slot(state.free_slots, slot, state.max),
           task_slots: task_slots
         }
       else
@@ -113,6 +156,11 @@ defmodule DistributedTaskQueue.QueueManager do
   defp schedule_poll do
     Process.send_after(self(), :poll, @poll_interval)
   end
+
+  # A slot above the current limit belongs to a job that was already running
+  # when the queue was resized down, so it is retired rather than reused.
+  defp return_slot(free_slots, slot, max) when slot > max, do: free_slots
+  defp return_slot(free_slots, slot, _max), do: MapSet.put(free_slots, slot)
 
   defp pop_by_pid(task_slots, pid) do
     case Enum.find(task_slots, fn {_, p} -> p == pid end) do

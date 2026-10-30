@@ -205,7 +205,7 @@ end
 defmodule DistributedTaskQueue.DeleteQueueTest do
   use DistributedTaskQueue.DataCase, async: false
 
-  alias DistributedTaskQueue.{QueueCache, WorkerSupervisor}
+  alias DistributedTaskQueue.QueueCache
 
   setup do
     QueueCache.all() |> Enum.each(&QueueCache.delete(&1.name))
@@ -219,13 +219,15 @@ defmodule DistributedTaskQueue.DeleteQueueTest do
         "max_concurrent_jobs" => 2
       })
 
+    # Paused, so the manager add_job starts stays up without claiming the job.
+    {:ok, _} = DistributedTaskQueue.pause_queue(queue.name)
+
     {:ok, _job} =
       DistributedTaskQueue.add_job(queue.name, %{
         "worker_module" => "DistributedTaskQueue.EmailWorker",
         "payload" => %{}
       })
 
-    {:ok, _pid} = WorkerSupervisor.start_queue(queue.name, queue.max_concurrent_jobs)
     assert [{_pid, _}] = Registry.lookup(DistributedTaskQueue.WorkerRegistry, queue.name)
 
     assert {:ok, deleted} = DistributedTaskQueue.delete_queue(queue.name)
@@ -265,6 +267,8 @@ defmodule DistributedTaskQueue.RequeueDeadLetterTest do
   test "requeue_dead_letter_job resets the job to a claimable pending state" do
     queue = insert(:queue, name: "rq-#{System.unique_integer([:positive])}")
     on_exit(fn -> WorkerSupervisor.stop_queue(queue.name) end)
+    # Paused, so the woken manager leaves the requeued job where we can see it.
+    {:ok, _} = DistributedTaskQueue.pause_queue(queue.name)
 
     job =
       insert(:job,
@@ -308,6 +312,7 @@ defmodule DistributedTaskQueue.RequeueDeadLetterTest do
   test "requeue_all_dead_letter_jobs requeues every dead-lettered job" do
     queue = insert(:queue, name: "bulk-rq-#{System.unique_integer([:positive])}")
     on_exit(fn -> WorkerSupervisor.stop_queue(queue.name) end)
+    {:ok, _} = DistributedTaskQueue.pause_queue(queue.name)
 
     a = insert(:job, queue_name: queue.name, status: "discarded", dead_letter: true, worker_id: 1)
     b = insert(:job, queue_name: queue.name, status: "discarded", dead_letter: true, worker_id: 2)

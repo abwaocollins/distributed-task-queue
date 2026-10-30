@@ -1,16 +1,32 @@
 defmodule DistributedTaskQueue do
   @moduledoc false
 
-  alias DistributedTaskQueue.WorkerSupervisor
+  alias DistributedTaskQueue.{QueueManager, WorkerSupervisor}
   alias DistributedTaskQueue.Repo
   alias DistributedTaskQueue.{CronJob, CronScheduler, Job, Queue, QueueCache}
   import Ecto.Query
   require Logger
 
+  @doc """
+  Enqueue a job and make sure its queue's manager will pick it up now.
+
+  Every enqueue path — API, console, cron — goes through here, so this is the
+  one place that wakes the queue. Called inside a caller's own transaction, the
+  wake would run before the insert is visible; the job is then picked up on the
+  manager's next poll instead.
+  """
   def add_job(queue_name, job_attrs) do
-    %Job{}
-    |> Job.changeset(Map.merge(job_attrs, %{"queue_name" => queue_name}))
-    |> Repo.insert()
+    result =
+      %Job{}
+      |> Job.changeset(Map.merge(job_attrs, %{"queue_name" => queue_name}))
+      |> Repo.insert()
+
+    case result do
+      {:ok, job} -> ensure_queue_running(job.queue_name)
+      _ -> :ok
+    end
+
+    result
   end
 
   def add_queue(attrs) when is_map(attrs) do
@@ -109,16 +125,17 @@ defmodule DistributedTaskQueue do
   end
 
   @doc """
-  Start the queue's manager if it isn't already running, so a newly available
-  job is actually claimed.
+  Start the queue's manager, or wake it if it is already running, so a newly
+  available job is claimed now.
 
   A `QueueManager` stops itself once its queue drains, and only
   `QueueBootstrapper` starts them at boot — so anything that makes a job
-  claimable *after* boot (a requeue, a cron firing) has to call this or the job
-  sits `pending` forever.
+  claimable *after* boot (an enqueue, a requeue, a resume) has to call this or
+  the job sits `pending` forever. A running manager is woken too: while it has
+  jobs in flight it only re-polls when one finishes, so a free slot would
+  otherwise sit idle behind a slow job.
 
-  Idempotent: an already-running manager returns `{:error, {:already_started, _}}`,
-  which we ignore.
+  Idempotent, and safe to call as often as you like.
 
   If the queue row does not exist there is nothing to start, and any job already
   sitting in that queue is unclaimable — so this says so loudly rather than
@@ -135,7 +152,24 @@ defmodule DistributedTaskQueue do
         {:error, :queue_not_found}
 
       queue ->
-        WorkerSupervisor.start_queue(queue_name, queue.max_concurrent_jobs)
+        start_or_wake(queue, 3)
+    end
+  end
+
+  # A manager that has just found its queue empty is already stopping: it is
+  # still registered, so start_queue reports :already_started, but it will never
+  # handle a wake. wake/1 reports that, and we start a fresh one instead.
+  defp start_or_wake(_queue, 0), do: :ok
+
+  defp start_or_wake(queue, attempts) do
+    case WorkerSupervisor.start_queue(queue.name, queue.max_concurrent_jobs) do
+      {:error, {:already_started, pid}} ->
+        case QueueManager.wake(pid) do
+          :ok -> :ok
+          :not_running -> start_or_wake(queue, attempts - 1)
+        end
+
+      _ ->
         :ok
     end
   end
@@ -405,17 +439,21 @@ defmodule DistributedTaskQueue do
   @doc """
   Update a queue's description or concurrency.
 
-  A running `QueueManager` sized its worker slots when it started, so a new
-  `max_concurrent_jobs` takes effect the next time the manager starts (it stops
-  on its own once the queue drains). Restarting it here would kill in-flight
-  workers and strand their jobs in `started`.
+  A new `max_concurrent_jobs` is applied to the running manager straight away
+  (see `QueueManager.resize/2`): raising it starts waiting jobs now, lowering it
+  lets in-flight jobs finish rather than killing them. Only this node's manager
+  is resized; managers on other nodes pick it up when they next start.
   """
   def update_queue(%Queue{} = queue, attrs) do
     result = queue |> Queue.update_changeset(attrs) |> Repo.update()
 
     case result do
-      {:ok, updated} -> QueueCache.put(updated)
-      _ -> :ok
+      {:ok, updated} ->
+        QueueCache.put(updated)
+        QueueManager.resize(updated.name, updated.max_concurrent_jobs)
+
+      _ ->
+        :ok
     end
 
     result
@@ -447,8 +485,14 @@ defmodule DistributedTaskQueue do
         result = queue |> Queue.changeset(%{paused: false}) |> Repo.update()
 
         case result do
-          {:ok, updated} -> QueueCache.put(updated)
-          _ -> :ok
+          {:ok, updated} ->
+            QueueCache.put(updated)
+            # A paused manager only re-checks every poll interval, and one that
+            # never started (or idled out) would not check at all.
+            ensure_queue_running(updated.name)
+
+          _ ->
+            :ok
         end
 
         result

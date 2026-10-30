@@ -61,6 +61,9 @@ defmodule DistributedTaskQueueWeb.QueueControllerTest do
   describe "POST /api/queues/:name/stop" do
     test "stops a running queue with no pending jobs", %{conn: conn} do
       insert(:queue, name: "stoppable", max_concurrent_jobs: 1)
+      # An empty, unpaused queue's manager exits as soon as it finds no work;
+      # paused, it stays up so there is something to stop.
+      {:ok, _} = DistributedTaskQueue.pause_queue("stoppable")
       post(conn, ~p"/api/queues/stoppable/start")
       conn = post(conn, ~p"/api/queues/stoppable/stop")
       assert %{"data" => %{"status" => "stopped"}} = json_response(conn, 200)
@@ -90,6 +93,8 @@ defmodule DistributedTaskQueueWeb.QueueControllerTest do
     test "deletes an existing queue and its jobs", %{conn: conn} do
       {:ok, queue} =
         DistributedTaskQueue.add_queue(%{"name" => "ctrl-del-#{System.unique_integer([:positive])}"})
+
+      {:ok, _} = DistributedTaskQueue.pause_queue(queue.name)
 
       {:ok, _job} =
         DistributedTaskQueue.add_job(queue.name, %{

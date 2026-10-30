@@ -110,11 +110,9 @@ defmodule DistributedTaskQueue.CronJobTest do
 
     test "belongs_to association allows preloading cron_job" do
       cron = insert(:cron_job)
-      {:ok, job} = DistributedTaskQueue.add_job(cron.queue_name, %{
-        "worker_module" => cron.worker_module,
-        "payload" => %{},
-        "cron_job_id" => cron.id
-      })
+      # insert/2 rather than add_job/2: add_job starts the queue's manager, which
+      # cannot reach an async test's sandbox.
+      job = insert(:job, queue_name: cron.queue_name, cron_job_id: cron.id)
 
       loaded = DistributedTaskQueue.Repo.preload(job, :cron_job)
       assert loaded.cron_job.id == cron.id

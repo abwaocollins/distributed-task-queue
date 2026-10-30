@@ -77,15 +77,15 @@ end
 
 ## Verification
 
-Measured at the time of the fix, **40 trials of 5 jobs against 5 concurrent claimers:**
+From a one-off run at the time of the fix, **40 trials of 5 jobs against 5 concurrent claimers** (the trial loop itself is not committed; the invariants below are checked by the committed tests on every run):
 
 | Version | Duplicate claims | Stranded in `started` | Lost rows | Claimed per trial |
 |---|---|---|---|---|
 | Original single statement | yes (forced interleaving) | 0 | 0 | 3–4 of 5 |
 | First fix (`SKIP LOCKED` in subquery) | 0 | **yes** | 0 | — |
-| Shipped (select-then-update in a transaction) | **0** | **0** | **0** | 5 of 5 |
+| Shipped (select-then-update in a transaction) | **0** | **0** | **0** | 3–5 of 5 |
 
-The guarantee is the first three columns. Throughput is best-effort: in a simultaneous burst a claimer can come back empty while work exists (the committed test has observed 3–5 of 5). That costs one poll cycle; the row stays `pending` and claimable.
+The guarantee is the first three columns. Throughput is best-effort: in a simultaneous burst a claimer can come back empty while work exists, so the count varies between runs. That costs one poll cycle; the row stays `pending` and claimable.
 
 ## Testing concurrency honestly
 

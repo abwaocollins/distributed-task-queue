@@ -167,12 +167,8 @@ defmodule DistributedTaskQueue.CronScheduler do
            "max_attempts" => cron.max_attempts,
            "cron_job_id" => cron.id
          }) do
+      # add_job/2 starts or wakes the queue's manager, so the job runs now.
       {:ok, job} ->
-        # A QueueManager shuts itself down once its queue goes idle, and only
-        # QueueBootstrapper restarts them (at boot). Without this, a cron firing
-        # into a quiet queue would insert a job that nothing ever claims.
-        DistributedTaskQueue.ensure_queue_running(cron.queue_name)
-
         :telemetry.execute([:dtq, :cron, :fired], %{count: 1}, %{
           cron_job_id: cron.id,
           cron_name: cron.name,

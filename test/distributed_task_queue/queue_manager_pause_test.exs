@@ -13,15 +13,15 @@ defmodule DistributedTaskQueue.QueueManagerPauseTest do
       "name" => "pause-mgr-#{System.unique_integer([:positive])}",
       "max_concurrent_jobs" => 2
     })
+    # Pause BEFORE enqueueing: add_job starts the manager and it polls at once.
+    {:ok, _} = DistributedTaskQueue.pause_queue(queue.name)
+
     {:ok, job} = DistributedTaskQueue.add_job(queue.name, %{
       "worker_module" => "DistributedTaskQueue.EmailWorker",
       "payload" => %{}
     })
 
-    # Pause the queue in the cache BEFORE starting the manager
-    QueueCache.put(%{queue | paused: true})
-
-    {:ok, manager_pid} = WorkerSupervisor.start_queue(queue.name, queue.max_concurrent_jobs)
+    [{manager_pid, _}] = Registry.lookup(DistributedTaskQueue.WorkerRegistry, queue.name)
 
     # Manually trigger a poll — no waiting for the 5s timer
     send(manager_pid, :poll)

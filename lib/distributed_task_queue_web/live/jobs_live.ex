@@ -80,9 +80,6 @@ defmodule DistributedTaskQueueWeb.JobsLive do
 
     with true <- changeset.valid?,
          {:ok, job} <- DistributedTaskQueue.add_job(params["queue_name"], changeset.params) do
-      # add_job/2 does not start a queue manager (a known gap), so a job created
-      # here would sit pending on a queue whose manager has idled out.
-      DistributedTaskQueue.ensure_queue_running(job.queue_name)
       Events.broadcast([:dtq, :console, :job_created], %{job_id: job.id})
 
       {:noreply,

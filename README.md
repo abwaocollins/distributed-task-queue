@@ -238,7 +238,7 @@ Every guard lived in the subquery, which scans `jobs` under a *different* range-
 
 The first fix — adding `FOR UPDATE SKIP LOCKED` to the subquery — stopped the double-claim and introduced something worse. PostgreSQL may evaluate that subplan once per candidate row, and with `SKIP LOCKED` each evaluation can return a different id, so one statement marked several rows `started`. The code matched on a single row, fell through to `{:error, :no_jobs}`, and left those rows stranded in `started` with nobody running them.
 
-What shipped is a select-then-update inside a transaction, so the lock is held across both statements and there is nothing to re-evaluate. Measured over 40 trials of 5 jobs against 5 concurrent claimers: **0 duplicates, 0 stranded, 0 lost, 5 of 5 claimed every trial.** The broken version managed 3–4.
+What shipped is a select-then-update inside a transaction, so the lock is held across both statements and there is nothing to re-evaluate. In a one-off run of 40 trials at the time of the fix (5 jobs, 5 concurrent claimers), it produced **0 duplicates, 0 stranded rows and 0 lost rows**, and the committed tests check those same invariants on every run. How many of the 5 jobs get claimed in a single simultaneous burst varies (3 to 5 observed): a claimer that loses the race comes back empty and tries again on its next poll, which costs one poll cycle, never a job.
 
 The test module for this opts out of the Ecto sandbox deliberately — the sandbox hands every process in a test the same connection, so anything that *looks* concurrent is silently serialised and proves nothing. Locks are held from a raw Postgrex connection to force the exact interleaving rather than hoping for it.
 

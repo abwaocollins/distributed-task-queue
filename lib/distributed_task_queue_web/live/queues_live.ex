@@ -230,8 +230,7 @@ defmodule DistributedTaskQueueWeb.QueuesLive do
           phx-debounce="300"
         />
         <p :if={@live_action == :edit} class="text-xs text-zinc-500 dark:text-zinc-400">
-          A new concurrency applies the next time the queue's manager starts. Restarting it now
-          would kill jobs in flight.
+          A new concurrency applies immediately. Lowering it lets jobs already running finish.
         </p>
         <:actions>
           <.btn patch={~p"/queues"}>Cancel</.btn>

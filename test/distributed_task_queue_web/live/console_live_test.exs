@@ -246,6 +246,8 @@ defmodule DistributedTaskQueueWeb.ConsoleLiveTest do
     test "filters by queue and requeues one job", %{conn: conn} do
       a = insert(:queue, name: "a")
       cleanup_queue(a.name)
+      # Paused, so the requeued job is not run before we look at it.
+      {:ok, _} = DistributedTaskQueue.pause_queue(a.name)
       in_a = insert(:job, queue_name: a.name, status: "discarded", dead_letter: true)
       other = insert(:job, status: "discarded", dead_letter: true)
 
