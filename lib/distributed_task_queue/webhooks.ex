@@ -31,7 +31,7 @@ defmodule DistributedTaskQueue.Webhooks do
       attrs
       |> Map.new(fn {k, v} -> {to_string(k), v} end)
       |> Map.put("number", (max || 0) + 1)
-      |> sanitize_body()
+      |> sanitize()
 
     %Delivery{job_id: job_id}
     |> Delivery.changeset(attrs)
@@ -44,17 +44,34 @@ defmodule DistributedTaskQueue.Webhooks do
     Repo.all(from(d in Delivery, where: d.job_id == ^job_id, order_by: d.number))
   end
 
-  defp sanitize_body(%{"response_body" => body} = attrs) when is_binary(body) do
-    Map.put(attrs, "response_body", truncate(body))
+  # Must run after the keys are stringified in record_delivery/2, because it
+  # matches on string keys.
+  defp sanitize(attrs) do
+    attrs
+    |> clean("response_body", @max_body_bytes)
+    |> clean("error", @max_body_bytes)
+    |> clean("url", :infinity)
   end
 
-  defp sanitize_body(attrs), do: attrs
-
-  # Replace invalid bytes first so the result is valid UTF-8, then cut to the
-  # byte limit, backing off so a multi-byte codepoint is never split.
-  defp truncate(body) do
-    body |> String.replace_invalid() |> cut(@max_body_bytes)
+  defp clean(attrs, key, limit) do
+    case attrs do
+      %{^key => value} when is_binary(value) -> Map.put(attrs, key, scrub(value, limit))
+      _ -> attrs
+    end
   end
+
+  # Replace invalid bytes so the result is valid UTF-8, and drop NUL bytes:
+  # they are valid UTF-8 but Postgres text columns reject them, which would
+  # make the insert raise and lose the record. Then cut to the byte limit,
+  # backing off so a multi-byte codepoint is never split.
+  defp scrub(value, limit) do
+    value
+    |> String.replace_invalid()
+    |> String.replace(<<0>>, "")
+    |> cut(limit)
+  end
+
+  defp cut(s, :infinity), do: s
 
   defp cut(s, max) when byte_size(s) <= max, do: s
 

@@ -40,6 +40,31 @@ defmodule DistributedTaskQueue.WebhooksTest do
       assert String.valid?(d.response_body)
     end
 
+    test "strips NUL bytes from the response body, error and url" do
+      job = insert(:job)
+
+      assert {:ok, d} =
+               Webhooks.record_delivery(job, %{
+                 response_body: "ab" <> <<0>> <> "cd",
+                 error: "bad" <> <<0>> <> "thing",
+                 url: "http://x/" <> <<0>> <> "y"
+               })
+
+      assert d.response_body == "abcd"
+      assert d.error == "badthing"
+      assert d.url == "http://x/y"
+
+      stored = hd(Webhooks.list_deliveries(job.id))
+      refute String.contains?(stored.response_body, <<0>>)
+      refute String.contains?(stored.error, <<0>>)
+    end
+
+    test "truncates a long error" do
+      job = insert(:job)
+      {:ok, d} = Webhooks.record_delivery(job, %{error: String.duplicate("e", 5000)})
+      assert byte_size(d.error) == 2048
+    end
+
     test "leaves a short body and a missing body alone" do
       job = insert(:job)
       {:ok, d1} = Webhooks.record_delivery(job, %{response_body: "ok"})
