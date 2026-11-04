@@ -60,6 +60,42 @@ defmodule DistributedTaskQueue.Webhooks.RequestTest do
                Request.normalize(%{"url" => "https://example.com", "headers" => ["a"]})
     end
 
+    test "rejects header values with control characters" do
+      for bad <- ["a\r\nX-Evil: 1", "a\nb", "a\rb", "a\0b", "a\x7Fb"] do
+        assert {:error, [{:headers, _}]} =
+                 Request.normalize(%{
+                   "url" => "https://example.com",
+                   "headers" => %{"x-a" => bad}
+                 })
+      end
+
+      assert {:ok, _} =
+               Request.normalize(%{
+                 "url" => "https://example.com",
+                 "headers" => %{"x-a" => "a	b"}
+               })
+    end
+
+    test "rejects invalid header names" do
+      for bad <- ["", "has space", "bad\nname", "colon:name"] do
+        assert {:error, [{:headers, _}]} =
+                 Request.normalize(%{"url" => "https://example.com", "headers" => %{bad => "v"}})
+      end
+    end
+
+    test "rejects header names that differ only by case" do
+      assert {:error, [{:headers, _}]} =
+               Request.normalize(%{
+                 "url" => "https://example.com",
+                 "headers" => %{"Accept" => "a", "accept" => "b"}
+               })
+    end
+
+    test "returns an error instead of raising for an unencodable body" do
+      assert {:error, [{:body, _}]} =
+               Request.normalize(%{"url" => "https://example.com", "body" => %{"a" => {1, 2}}})
+    end
+
     test "lowercases header names" do
       assert {:ok, req} =
                Request.normalize(%{
@@ -125,6 +161,23 @@ defmodule DistributedTaskQueue.Webhooks.RequestTest do
       end
 
       assert redacted["accept"] == "application/json"
+    end
+
+    test "redacts signature headers but not look-alikes" do
+      redacted =
+        Request.redact_headers(%{
+          "stripe-signature" => "s",
+          "x-hub-signature-256" => "s",
+          "proxy-authorization" => "p",
+          "www-authenticate" => "Basic",
+          "x-author" => "me"
+        })
+
+      assert redacted["stripe-signature"] == @masked
+      assert redacted["x-hub-signature-256"] == @masked
+      assert redacted["proxy-authorization"] == @masked
+      assert redacted["www-authenticate"] == "Basic"
+      assert redacted["x-author"] == "me"
     end
 
     test "masked/0 exposes the mask" do

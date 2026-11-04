@@ -14,10 +14,14 @@ defmodule DistributedTaskQueue.Webhooks.Request do
 
   @masked "••••"
 
+  @header_name ~r/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
+  # Control characters except tab, plus DEL.
+  @bad_value_chars ~r/[\x00-\x08\x0A-\x1F\x7F]/
+
   # A header is treated as a credential when its name contains one of these.
   # Substring matching is deliberately broad: hiding a harmless header costs
   # nothing, leaking a token does.
-  @secret_fragments ~w(auth token key secret cookie password credential)
+  @secret_fragments ~w(authorization cookie token secret key signature password credential)
 
   @doc "The placeholder shown in place of a redacted header value."
   @spec masked() :: String.t()
@@ -78,7 +82,10 @@ defmodule DistributedTaskQueue.Webhooks.Request do
   end
 
   defp build(url, method, headers, body, timeout) do
-    {encoded, headers} = encode_body(body, headers)
+    {encoded, json?} = body
+
+    headers =
+      if json?, do: Map.put_new(headers, "content-type", "application/json"), else: headers
 
     %{
       "url" => url,
@@ -125,15 +132,50 @@ defmodule DistributedTaskQueue.Webhooks.Request do
   defp validate_headers(nil), do: {:ok, %{}}
 
   defp validate_headers(headers) when is_map(headers) do
-    if Enum.all?(headers, fn {k, v} -> is_binary(k) and is_binary(v) end),
-      do: {:ok, Map.new(headers, fn {k, v} -> {String.downcase(k), v} end)},
-      else: {:error, {:headers, "names and values must be strings"}}
+    with :ok <- check_header_pairs(headers),
+         lowered = Enum.map(headers, fn {k, v} -> {String.downcase(k), v} end),
+         :ok <- check_no_case_duplicates(lowered) do
+      {:ok, Map.new(lowered)}
+    end
   end
 
   defp validate_headers(_), do: {:error, {:headers, "must be a map"}}
 
-  defp validate_body(nil), do: {:ok, nil}
-  defp validate_body(body) when is_binary(body) or is_map(body) or is_list(body), do: {:ok, body}
+  defp check_header_pairs(headers) do
+    cond do
+      not Enum.all?(headers, fn {k, v} -> is_binary(k) and is_binary(v) end) ->
+        {:error, {:headers, "names and values must be strings"}}
+
+      not Enum.all?(headers, fn {k, _} -> Regex.match?(@header_name, k) end) ->
+        {:error,
+         {:headers, "names must be non-empty tokens without whitespace or control characters"}}
+
+      # CR/LF in a value would let a caller inject extra headers.
+      not Enum.all?(headers, fn {_, v} -> not Regex.match?(@bad_value_chars, v) end) ->
+        {:error, {:headers, "values must not contain control characters"}}
+
+      true ->
+        :ok
+    end
+  end
+
+  # Names are case-insensitive, so two spellings of one name are ambiguous.
+  defp check_no_case_duplicates(lowered) do
+    if length(lowered) == lowered |> Enum.uniq_by(&elem(&1, 0)) |> length(),
+      do: :ok,
+      else: {:error, {:headers, "contains the same header name more than once"}}
+  end
+
+  defp validate_body(nil), do: {:ok, {nil, false}}
+  defp validate_body(body) when is_binary(body), do: {:ok, {body, false}}
+
+  defp validate_body(body) when is_map(body) or is_list(body) do
+    case Jason.encode(body) do
+      {:ok, json} -> {:ok, {json, true}}
+      {:error, _} -> {:error, {:body, "could not be encoded as JSON"}}
+    end
+  end
+
   defp validate_body(_), do: {:error, {:body, "must be a string, map or list"}}
 
   defp validate_timeout(nil), do: {:ok, @default_timeout_ms}
@@ -141,12 +183,6 @@ defmodule DistributedTaskQueue.Webhooks.Request do
   defp validate_timeout(ms) when is_integer(ms) and ms > 0, do: {:ok, min(ms, @max_timeout_ms)}
 
   defp validate_timeout(_), do: {:error, {:timeout_ms, "must be a positive integer"}}
-
-  defp encode_body(body, headers) when is_map(body) or is_list(body) do
-    {Jason.encode!(body), Map.put_new(headers, "content-type", "application/json")}
-  end
-
-  defp encode_body(body, headers), do: {body, headers}
 
   defp secret_name?(name) do
     lowered = String.downcase(to_string(name))
