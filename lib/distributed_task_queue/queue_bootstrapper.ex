@@ -15,6 +15,8 @@ defmodule DistributedTaskQueue.QueueBootstrapper do
   end
 
   defp do_boot do
+    DistributedTaskQueue.Webhooks.ensure_queue()
+
     DistributedTaskQueue.list_queues()
     |> Enum.each(fn queue ->
       QueueCache.put(queue)

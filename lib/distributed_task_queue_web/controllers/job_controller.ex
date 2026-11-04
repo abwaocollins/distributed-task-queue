@@ -1,6 +1,9 @@
 defmodule DistributedTaskQueueWeb.JobController do
   use DistributedTaskQueueWeb, :controller
 
+  alias DistributedTaskQueue.Webhooks
+  alias DistributedTaskQueue.Webhooks.Request
+  alias DistributedTaskQueue.Workers.Webhook
   alias DistributedTaskQueueWeb.ChangesetErrors
 
   def index(conn, params) do
@@ -59,7 +62,35 @@ defmodule DistributedTaskQueueWeb.JobController do
     json(conn, %{data: %{requeued: count}})
   end
 
-  defp job_json(job) do
+  @doc false
+  def job_json(%{worker_module: module} = job) do
+    if module == Webhook.module_name() do
+      job
+      |> base_json()
+      |> Map.update!(:payload, &redact_payload/1)
+      |> Map.put(:deliveries, Enum.map(Webhooks.list_deliveries(job.id), &delivery_json/1))
+    else
+      base_json(job)
+    end
+  end
+
+  defp redact_payload(%{"headers" => headers} = payload) when is_map(headers),
+    do: Map.put(payload, "headers", Request.redact_headers(headers))
+
+  defp redact_payload(payload), do: payload
+
+  defp delivery_json(d) do
+    %{
+      number: d.number,
+      status_code: d.status_code,
+      duration_ms: d.duration_ms,
+      error: d.error,
+      response_body: d.response_body,
+      inserted_at: format_dt(d.inserted_at)
+    }
+  end
+
+  defp base_json(job) do
     %{
       id: job.id,
       queue_name: job.queue_name,

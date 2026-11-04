@@ -1,6 +1,7 @@
 defmodule DistributedTaskQueueWeb.CronJobController do
   use DistributedTaskQueueWeb, :controller
 
+  alias DistributedTaskQueue.{CronJob, Webhooks}
   alias DistributedTaskQueueWeb.ChangesetErrors
 
   # Owned by the scheduler. `enabled` changes go through enable/disable, which
@@ -17,18 +18,28 @@ defmodule DistributedTaskQueueWeb.CronJobController do
   end
 
   def create(conn, params) do
-    case DistributedTaskQueue.create_cron_job(Map.drop(params, @scheduler_fields)) do
-      {:ok, cron} -> conn |> put_status(:created) |> json(%{data: cron_json(cron)})
+    {errors, attrs} = params |> Webhooks.cron_attrs() |> Map.pop("webhook_errors")
+
+    with :ok <- check_webhook(%CronJob{}, attrs, errors),
+         {:ok, cron} <- DistributedTaskQueue.create_cron_job(Map.drop(attrs, @scheduler_fields)) do
+      conn |> put_status(:created) |> json(%{data: cron_json(cron)})
+    else
       {:error, changeset} -> unprocessable(conn, changeset)
     end
   end
 
   def update(conn, %{"id" => id} = params) do
     with_cron(conn, id, fn cron ->
-      attrs = Map.drop(params, ["id" | @update_ignored])
+      {errors, attrs} =
+        params
+        |> Map.drop(["id" | @update_ignored])
+        |> Webhooks.cron_attrs()
+        |> Map.pop("webhook_errors")
 
-      case DistributedTaskQueue.update_cron_job(cron, attrs) do
-        {:ok, updated} -> json(conn, %{data: cron_json(updated)})
+      with :ok <- check_webhook(cron, attrs, errors),
+           {:ok, updated} <- DistributedTaskQueue.update_cron_job(cron, attrs) do
+        json(conn, %{data: cron_json(updated)})
+      else
         {:error, changeset} -> unprocessable(conn, changeset)
       end
     end)
@@ -53,6 +64,19 @@ defmodule DistributedTaskQueueWeb.CronJobController do
       {:ok, cron} = DistributedTaskQueue.disable_cron_job(cron)
       json(conn, %{data: cron_json(cron)})
     end)
+  end
+
+  # An invalid webhook object is reported as errors on payload, alongside any
+  # other problems with the cron itself.
+  defp check_webhook(_cron, _attrs, nil), do: :ok
+
+  defp check_webhook(cron, attrs, messages) do
+    changeset =
+      Enum.reduce(messages, CronJob.changeset(cron, attrs), fn msg, cs ->
+        Ecto.Changeset.add_error(cs, :payload, msg)
+      end)
+
+    {:error, changeset}
   end
 
   defp with_cron(conn, id, fun) do

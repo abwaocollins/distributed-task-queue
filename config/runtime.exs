@@ -59,11 +59,44 @@ if config_env() == :prod do
 
   # API keys for /api/*, comma-separated. Unset means the API is locked: an open
   # job-creation endpoint on the internet will be abused.
+  #
+  # DTQ_DEMO_API_KEY is a showcase key that the public intro page may display.
+  # It is a real API key, so only set it on a deployment where that is intended.
+  demo_api_key =
+    case System.get_env("DTQ_DEMO_API_KEY") do
+      key when is_binary(key) and key != "" -> key
+      _ -> nil
+    end
+
+  if demo_api_key do
+    config :distributed_task_queue, :demo_api_key, demo_api_key
+  end
+
   config :distributed_task_queue,
          :api_keys,
          (System.get_env("DTQ_API_KEYS") || "")
          |> String.split(",", trim: true)
          |> Enum.map(&String.trim/1)
+         |> Kernel.++(List.wrap(demo_api_key))
+
+  # Webhook deliveries are signed with this secret, so receivers can verify
+  # them. Refuse to start without it rather than send unsigned requests.
+  webhook_secret =
+    case System.get_env("DTQ_WEBHOOK_SECRET") do
+      secret when is_binary(secret) and secret != "" ->
+        secret
+
+      _ ->
+        raise """
+        environment variable DTQ_WEBHOOK_SECRET is missing.
+        It signs outgoing webhook requests. You can generate one with: mix phx.gen.secret
+        """
+    end
+
+  config :distributed_task_queue, :webhooks,
+    secret: webhook_secret,
+    targets: if(System.get_env("DTQ_WEBHOOK_TARGETS") == "demo", do: :demo_receivers, else: :any),
+    allow_private_targets: false
 
   # Basic auth for the console and LiveDashboard. A public demo can opt out for
   # the console only with DTQ_PUBLIC_CONSOLE=true; LiveDashboard stays locked.

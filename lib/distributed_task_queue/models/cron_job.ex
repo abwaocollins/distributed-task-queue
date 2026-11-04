@@ -36,6 +36,7 @@ defmodule DistributedTaskQueue.CronJob do
     |> unique_constraint(:name)
     |> validate_number(:interval_seconds, greater_than: 0)
     |> validate_number(:max_attempts, greater_than: 0)
+    |> validate_demo_interval()
     |> validate_schedule()
     |> validate_cron_expression()
     |> validate_timezone()
@@ -92,6 +93,13 @@ defmodule DistributedTaskQueue.CronJob do
       {:error, reason} ->
         raise ArgumentError, "cannot resolve #{naive} in timezone #{zone}: #{inspect(reason)}"
     end
+  end
+
+  # A public demo must not let a cron hit the receivers every second.
+  defp validate_demo_interval(changeset) do
+    if DistributedTaskQueue.Webhooks.targets() == :demo_receivers,
+      do: validate_number(changeset, :interval_seconds, greater_than_or_equal_to: 10),
+      else: changeset
   end
 
   defp validate_schedule(changeset) do

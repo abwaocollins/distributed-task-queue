@@ -1,7 +1,8 @@
 # Fly.io config. `fly launch --no-deploy` will offer to reuse this; set `app`
 # to the name you pick. Secrets (not in this file):
 #   fly secrets set SECRET_KEY_BASE=$(mix phx.gen.secret) \
-#     DTQ_API_KEYS=... DTQ_ADMIN_USERNAME=... DTQ_ADMIN_PASSWORD=...
+#     DTQ_API_KEYS=... DTQ_ADMIN_USERNAME=... DTQ_ADMIN_PASSWORD=... \
+#     DTQ_WEBHOOK_SECRET=$(mix phx.gen.secret)
 # DATABASE_URL is set by `fly postgres attach`.
 
 app = "distributed-task-queue"
@@ -20,6 +21,8 @@ kill_signal = "SIGTERM"
   # demo data generator on. Remove both for a private deployment.
   DTQ_PUBLIC_CONSOLE = "true"
   DTQ_DEMO_MODE = "true"
+  # Webhooks may only target the built-in demo receivers.
+  DTQ_WEBHOOK_TARGETS = "demo"
 
 [http_service]
   internal_port = 8080
