@@ -9,10 +9,10 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    name: test (Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }})
+    name: test (Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }} / Postgres ${{ matrix.postgres }})
 
-    # The floor (what `mix.exs` allows and local dev runs) and the latest
-    # release (what the Docker image ships). Coverage is uploaded once, from
+    # The floor (what `mix.exs` allows and local dev runs, on Postgres 17) and
+    # the latest release (what the Docker image ships, on Postgres 18). Coverage is uploaded once, from
     # the latest.
     strategy:
       fail-fast: false
@@ -20,13 +20,15 @@ jobs:
         include:
           - elixir: '1.18'
             otp: '25'
+            postgres: '17'
           - elixir: '1.20.5'
             otp: '29.1.2'
+            postgres: '18'
             latest: true
 
     services:
       postgres:
-        image: postgres:14-alpine
+        image: postgres:${{ matrix.postgres }}-alpine
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres

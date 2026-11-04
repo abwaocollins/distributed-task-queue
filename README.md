@@ -6,7 +6,7 @@ Underneath, it is a background job queue that keeps running when a machine dies.
 
 [![CI](https://github.com/abwaocollins/distributed-task-queue/actions/workflows/ci.yml/badge.svg)](https://github.com/abwaocollins/distributed-task-queue/actions/workflows/ci.yml)
 ![Elixir](https://img.shields.io/badge/elixir-1.18%20%E2%80%93%201.20-purple)
-![PostgreSQL](https://img.shields.io/badge/postgresql-14%2B-blue)
+![PostgreSQL](https://img.shields.io/badge/postgresql-17%2B-blue)
 
 <!-- DEMO SLOT — live demo link and the kill-a-node GIF go here, above the fold. -->
 
@@ -454,7 +454,7 @@ mix dialyzer          # type checking
 
 ## Running locally
 
-Requires Elixir 1.18+ with OTP 25+ (CI tests Elixir 1.18 / OTP 25 and 1.20 / OTP 29), and PostgreSQL 14+.
+Requires Elixir 1.18+ with OTP 25+, and PostgreSQL 17+. CI tests Elixir 1.18 / OTP 25 on PostgreSQL 17 and Elixir 1.20 / OTP 29 on PostgreSQL 18.
 
 ```bash
 mix setup       # deps, database create + migrate, assets
