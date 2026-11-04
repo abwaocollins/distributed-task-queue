@@ -169,10 +169,12 @@ defmodule DistributedTaskQueueWeb.ConsoleLiveTest do
       assert html =~ "No jobs match these filters"
     end
 
-    test "creates a job, rejecting invalid JSON and bad module names", %{conn: conn} do
+    test "the Elixir worker form still works", %{conn: conn} do
       queue = insert(:queue, name: "emails")
       cleanup_queue(queue.name)
       {:ok, view, _html} = live(conn, ~p"/jobs/new")
+
+      view |> form("#job-form", job: %{kind: "worker"}) |> render_change()
 
       html =
         view
@@ -239,6 +241,112 @@ defmodule DistributedTaskQueueWeb.ConsoleLiveTest do
     test "detail page for a missing job says so", %{conn: conn} do
       {:ok, _view, html} = live(conn, ~p"/jobs/999999")
       assert html =~ "does not exist or was deleted"
+    end
+  end
+
+  describe "webhook jobs" do
+    setup do
+      queue = insert(:queue, name: "webhooks")
+      cleanup_queue(queue.name)
+      :ok
+    end
+
+    test "creating a webhook job from the form", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/jobs/new")
+      view |> element("button", "Add a header") |> render_click()
+
+      view
+      |> form("#job-form",
+        job: %{
+          url: "http://127.0.0.1:9/hook",
+          method: "PUT",
+          body: ~s({"order": 42}),
+          headers: %{"0" => %{key: "X-Api-Key", value: "abc"}}
+        }
+      )
+      |> render_submit()
+
+      assert [job] = Repo.all(Job)
+      assert job.worker_module == DistributedTaskQueue.Workers.Webhook.module_name()
+      assert job.queue_name == "webhooks"
+      assert job.max_attempts == 5
+      assert job.payload["url"] == "http://127.0.0.1:9/hook"
+      assert job.payload["method"] == "PUT"
+      assert job.payload["headers"]["x-api-key"] == "abc"
+      assert job.payload["body"] == ~s({"order":42})
+      assert render(view) =~ "Job ##{job.id} enqueued on webhooks"
+    end
+
+    test "inline error for a bad URL", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/jobs/new")
+
+      html =
+        view
+        |> form("#job-form", job: %{url: "ftp://example.com/x"})
+        |> render_submit()
+
+      assert html =~ "must be an http or https URL"
+      assert Repo.all(Job) == []
+    end
+
+    test "demo_receivers mode shows a receiver picker, not a URL field", %{conn: conn} do
+      original = Application.get_env(:distributed_task_queue, :webhooks, [])
+
+      Application.put_env(
+        :distributed_task_queue,
+        :webhooks,
+        Keyword.put(original, :targets, :demo_receivers)
+      )
+
+      on_exit(fn -> Application.put_env(:distributed_task_queue, :webhooks, original) end)
+
+      {:ok, view, html} = live(conn, ~p"/jobs/new")
+
+      assert html =~ "Payments"
+      assert has_element?(view, "select#job_url")
+      refute has_element?(view, "input#job_url")
+
+      url = DistributedTaskQueue.Webhooks.Target.demo_receiver_url("email")
+      view |> form("#job-form", job: %{url: url}) |> render_submit()
+
+      assert [job] = Repo.all(Job)
+      assert job.payload["url"] == url
+    end
+
+    test "run in 10 minutes sets scheduled_at", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/jobs/new")
+      view |> form("#job-form", job: %{when: "in"}) |> render_change()
+
+      view
+      |> form("#job-form", job: %{url: "http://127.0.0.1:9/hook", in_minutes: "10"})
+      |> render_submit()
+
+      assert [job] = Repo.all(Job)
+      diff = DateTime.diff(job.scheduled_at, DateTime.utc_now())
+      assert diff in 590..610
+    end
+
+    test "run at a date and time is read as UTC", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/jobs/new")
+      view |> form("#job-form", job: %{when: "at"}) |> render_change()
+
+      view
+      |> form("#job-form", job: %{url: "http://127.0.0.1:9/hook", run_at: "2099-11-05T09:30"})
+      |> render_submit()
+
+      assert [job] = Repo.all(Job)
+      assert DateTime.to_iso8601(job.scheduled_at) == "2099-11-05T09:30:00Z"
+    end
+
+    test "headers can be added and removed", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/jobs/new")
+      view |> element("button", "Add a header") |> render_click()
+      view |> element("button", "Add a header") |> render_click()
+      assert has_element?(view, "#header-row-1")
+
+      view |> element("#header-row-0 button", "Remove") |> render_click()
+      assert has_element?(view, "#header-row-0")
+      refute has_element?(view, "#header-row-1")
     end
   end
 

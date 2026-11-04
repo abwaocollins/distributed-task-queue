@@ -5,8 +5,9 @@ defmodule DistributedTaskQueueWeb.JobsLive do
   """
   use DistributedTaskQueueWeb, :live_view
 
-  alias DistributedTaskQueue.{Dashboard, Events, Job}
-  alias DistributedTaskQueueWeb.{JsonField, LiveRefresh}
+  alias DistributedTaskQueue.{Dashboard, Events, Job, Webhooks}
+  alias DistributedTaskQueue.Webhooks.{Request, Target}
+  alias DistributedTaskQueueWeb.{CoreComponents, JsonField, LiveRefresh, WebhookFields}
 
   @filter_keys ~w(queue status errors q)
 
@@ -46,14 +47,40 @@ defmodule DistributedTaskQueueWeb.JobsLive do
 
   defp apply_action(socket, :new) do
     params = %{"queue_name" => socket.assigns.filters["queue"], "max_attempts" => 3}
+    targets = Webhooks.targets()
 
     assign(socket,
+      kind: "webhook",
       form: to_form(Job.changeset(%Job{}, params), as: :job),
-      payload_text: "{}"
+      payload_text: "{}",
+      targets: targets,
+      header_rows: [],
+      wh_form: webhook_form(webhook_defaults(socket, targets), [])
     )
   end
 
   defp apply_action(socket, _index), do: assign(socket, form: nil)
+
+  defp webhook_defaults(socket, targets) do
+    queue = if "webhooks" in socket.assigns.queue_names, do: "webhooks", else: ""
+
+    %{
+      "kind" => "webhook",
+      "url" => if(targets == :demo_receivers, do: first_receiver_url(), else: ""),
+      "method" => "POST",
+      "body" => "",
+      "queue_name" => queue,
+      "max_attempts" => "5",
+      "when" => "now",
+      "in_minutes" => "10",
+      "run_at" => ""
+    }
+  end
+
+  defp first_receiver_url do
+    [name | _] = Target.demo_receiver_names()
+    Target.demo_receiver_url(name)
+  end
 
   ## Filters
 
@@ -68,24 +95,42 @@ defmodule DistributedTaskQueueWeb.JobsLive do
 
   ## Create
 
-  def handle_event("validate", %{"job" => params}, socket) do
+  def handle_event("validate", %{"job" => %{"kind" => "worker"} = params}, socket) do
     {changeset, text} = build_job(params)
 
     {:noreply,
-     assign(socket, form: to_form(%{changeset | action: :validate}, as: :job), payload_text: text)}
+     assign(socket,
+       kind: "worker",
+       form: to_form(%{changeset | action: :validate}, as: :job),
+       payload_text: text
+     )}
   end
 
-  def handle_event("save", %{"job" => params}, socket) do
+  # Typing must stay cheap, so only the offline checks run here. The target
+  # check (a DNS lookup) waits for the save.
+  def handle_event("validate", %{"job" => params}, socket) do
+    params = Map.merge(webhook_defaults(socket, socket.assigns.targets), params)
+    rows = header_rows(params, socket.assigns.header_rows)
+    {attrs, local_errors} = webhook_attrs(params, rows)
+
+    request_errors =
+      case Request.normalize(attrs) do
+        {:ok, _} -> []
+        {:error, errs} -> Enum.reject(errs, &(&1 == {:url, "is required"} and params["url"] == ""))
+      end
+
+    errors = local_errors ++ Enum.map(request_errors, fn {f, msg} -> {f, {msg, []}} end)
+
+    {:noreply,
+     assign(socket, kind: "webhook", header_rows: rows, wh_form: webhook_form(params, errors))}
+  end
+
+  def handle_event("save", %{"job" => %{"kind" => "worker"} = params}, socket) do
     {changeset, text} = build_job(params)
 
     with true <- changeset.valid?,
          {:ok, job} <- DistributedTaskQueue.add_job(params["queue_name"], changeset.params) do
-      Events.broadcast([:dtq, :console, :job_created], %{job_id: job.id})
-
-      {:noreply,
-       socket
-       |> put_flash(:info, "Job ##{job.id} enqueued on #{job.queue_name}.")
-       |> push_patch(to: jobs_path(socket.assigns.filters, 1))}
+      {:noreply, created(socket, job)}
     else
       false ->
         {:noreply,
@@ -97,6 +142,40 @@ defmodule DistributedTaskQueueWeb.JobsLive do
       {:error, failed} ->
         {:noreply, assign(socket, form: to_form(failed, as: :job), payload_text: text)}
     end
+  end
+
+  def handle_event("save", %{"job" => params}, socket) do
+    params = Map.merge(webhook_defaults(socket, socket.assigns.targets), params)
+    rows = header_rows(params, socket.assigns.header_rows)
+
+    result =
+      case webhook_attrs(params, rows) do
+        {attrs, []} -> Webhooks.enqueue(attrs)
+        {_attrs, local_errors} -> {:local_errors, local_errors}
+      end
+
+    case result do
+      {:ok, job} ->
+        {:noreply, created(socket, job)}
+
+      {:error, changeset} ->
+        {:noreply,
+         assign(socket,
+           header_rows: rows,
+           wh_form: webhook_form(params, changeset_errors(changeset))
+         )}
+
+      {:local_errors, errors} ->
+        {:noreply, assign(socket, header_rows: rows, wh_form: webhook_form(params, errors))}
+    end
+  end
+
+  def handle_event("add_header", _params, socket),
+    do: {:noreply, update(socket, :header_rows, &(&1 ++ [%{key: "", value: ""}]))}
+
+  def handle_event("remove_header", %{"index" => index}, socket) do
+    rows = List.delete_at(socket.assigns.header_rows, String.to_integer(index))
+    {:noreply, assign(socket, header_rows: rows)}
   end
 
   ## Row actions
@@ -116,6 +195,130 @@ defmodule DistributedTaskQueueWeb.JobsLive do
       end
 
     {:noreply, LiveRefresh.refresh(socket)}
+  end
+
+  defp created(socket, job) do
+    Events.broadcast([:dtq, :console, :job_created], %{job_id: job.id})
+
+    socket
+    |> put_flash(:info, "Job ##{job.id} enqueued on #{job.queue_name}.")
+    |> push_patch(to: jobs_path(socket.assigns.filters, 1))
+  end
+
+  ## Webhook form
+
+  # The form is built from the raw params rather than a changeset: a webhook
+  # job's fields live inside its payload, so there is no schema to cast into.
+  defp webhook_form(params, errors), do: to_form(params, as: :job, errors: errors)
+
+  defp header_rows(%{"headers" => headers}, _current) when is_map(headers) do
+    headers
+    |> Enum.sort_by(fn {i, _} -> String.to_integer(i) end)
+    |> Enum.map(fn {_, row} -> %{key: row["key"] || "", value: row["value"] || ""} end)
+  end
+
+  defp header_rows(_params, current), do: current
+
+  # Turns form params into what `Webhooks.enqueue/1` takes, the same call the
+  # API makes, so both share one rule set. Problems that only exist in the
+  # form (a half-typed number or date) come back as errors for the form.
+  defp webhook_attrs(params, rows) do
+    headers =
+      for %{key: key, value: value} <- rows, String.trim(key) != "", into: %{} do
+        {String.trim(key), value}
+      end
+
+    attrs = %{
+      "url" => params["url"],
+      "method" => params["method"],
+      "headers" => headers,
+      "body" => decode_body(params["body"]),
+      "queue" => blank_to_nil(params["queue_name"]),
+      "max_attempts" => parse_int(params["max_attempts"])
+    }
+
+    case schedule_attrs(params) do
+      {:ok, schedule} -> {Map.merge(attrs, schedule), []}
+      {:error, error} -> {attrs, [when: error]}
+    end
+  end
+
+  defp schedule_attrs(%{"when" => "in"} = params) do
+    case Integer.parse(String.trim(params["in_minutes"] || "")) do
+      {minutes, ""} when minutes >= 0 -> {:ok, %{"delay_seconds" => minutes * 60}}
+      _ -> {:error, {"Enter a whole number of minutes.", []}}
+    end
+  end
+
+  # The browser sends no offset, so the time is read as UTC.
+  defp schedule_attrs(%{"when" => "at"} = params) do
+    text = String.trim(params["run_at"] || "")
+    text = if String.length(text) == 16, do: text <> ":00", else: text
+
+    case NaiveDateTime.from_iso8601(text) do
+      {:ok, naive} ->
+        {:ok, %{"run_at" => naive |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_iso8601()}}
+
+      _ ->
+        {:error, {"Pick a date and time.", []}}
+    end
+  end
+
+  defp schedule_attrs(_params), do: {:ok, %{}}
+
+  # JSON objects and arrays are sent as JSON; anything else goes as typed.
+  defp decode_body(nil), do: nil
+
+  defp decode_body(text) do
+    trimmed = String.trim(text)
+
+    case Jason.decode(trimmed) do
+      _ when trimmed == "" -> nil
+      {:ok, decoded} when is_map(decoded) or is_list(decoded) -> decoded
+      _ -> text
+    end
+  end
+
+  defp blank_to_nil(value) when value in [nil, ""], do: nil
+  defp blank_to_nil(value), do: value
+
+  defp parse_int(value) when value in [nil, ""], do: nil
+
+  defp parse_int(value) do
+    case Integer.parse(value) do
+      {n, ""} -> n
+      _ -> value
+    end
+  end
+
+  @request_fields %{
+    "url" => :url,
+    "method" => :method,
+    "headers" => :headers,
+    "body" => :body,
+    "timeout_ms" => :timeout_ms
+  }
+
+  # `Webhooks.enqueue/1` reports request problems under :payload, either as
+  # "field: message" or as a plain sentence about the target (shown by the URL).
+  defp changeset_errors(changeset) do
+    for {field, error} <- changeset.errors do
+      message = CoreComponents.translate_error(error)
+
+      case {field, Regex.run(~r/\A(\w+): (.*)\z/s, message)} do
+        {:payload, [_, name, rest]} when is_map_key(@request_fields, name) ->
+          {Map.fetch!(@request_fields, name), {rest, []}}
+
+        {:payload, _} ->
+          {:url, {message, []}}
+
+        {:scheduled_at, _} ->
+          {:when, {message, []}}
+
+        _ ->
+          {field, {message, []}}
+      end
+    end
   end
 
   # The payload arrives as JSON text; the schema field is a map.
@@ -313,7 +516,62 @@ defmodule DistributedTaskQueueWeb.JobsLive do
       on_cancel={JS.patch(jobs_path(@filters, @page))}
     >
       <h2 class="text-lg font-semibold text-zinc-900 dark:text-zinc-100">New job</h2>
-      <.simple_form for={@form} id="job-form" phx-change="validate" phx-submit="save">
+      <.simple_form
+        :if={@kind == "webhook"}
+        for={@wh_form}
+        id="job-form"
+        phx-change="validate"
+        phx-submit="save"
+      >
+        <.kind_picker kind={@kind} />
+        <WebhookFields.fields form={@wh_form} targets={@targets} header_rows={@header_rows} />
+        <.input
+          field={@wh_form[:queue_name]}
+          type="select"
+          label="Queue"
+          prompt="Choose a queue"
+          options={@queue_names}
+        />
+        <div>
+          <.input
+            field={@wh_form[:when]}
+            type="select"
+            label="When"
+            options={[
+              {"Now", "now"},
+              {"In a number of minutes", "in"},
+              {"At a date and time (UTC)", "at"}
+            ]}
+          />
+          <.input
+            :if={@wh_form[:when].value == "in"}
+            field={@wh_form[:in_minutes]}
+            type="number"
+            min="0"
+            label="In … minutes"
+          />
+          <.input
+            :if={@wh_form[:when].value == "at"}
+            field={@wh_form[:run_at]}
+            type="datetime-local"
+            label="Date and time (UTC)"
+          />
+          <.error :for={msg <- WebhookFields.field_errors(@wh_form, :when)}>{msg}</.error>
+        </div>
+        <.input field={@wh_form[:max_attempts]} type="number" min="1" label="Max attempts" />
+        <:actions>
+          <.btn patch={jobs_path(@filters, @page)}>Cancel</.btn>
+          <.btn variant={:primary} type="submit" phx-disable-with="Enqueuing">Enqueue</.btn>
+        </:actions>
+      </.simple_form>
+      <.simple_form
+        :if={@kind == "worker"}
+        for={@form}
+        id="job-form"
+        phx-change="validate"
+        phx-submit="save"
+      >
+        <.kind_picker kind={@kind} />
         <.input
           field={@form[:queue_name]}
           type="select"
@@ -349,6 +607,21 @@ defmodule DistributedTaskQueueWeb.JobsLive do
         </:actions>
       </.simple_form>
     </.modal>
+    """
+  end
+
+  attr :kind, :string, required: true
+
+  defp kind_picker(assigns) do
+    ~H"""
+    <.input
+      id="job_kind"
+      name="job[kind]"
+      type="select"
+      label="What should this job do?"
+      value={@kind}
+      options={[{"Call a URL", "webhook"}, {"Run an Elixir worker", "worker"}]}
+    />
     """
   end
 
