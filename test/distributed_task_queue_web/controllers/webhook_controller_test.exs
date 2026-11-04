@@ -164,6 +164,134 @@ defmodule DistributedTaskQueueWeb.WebhookControllerTest do
     end
   end
 
+  describe "raw worker_module + payload naming the webhook worker" do
+    @worker "DistributedTaskQueue.Workers.Webhook"
+
+    defp raw_job(payload),
+      do: %{"queue_name" => insert(:queue).name, "worker_module" => @worker, "payload" => payload}
+
+    defp raw_cron(name, payload) do
+      %{
+        "name" => name,
+        "queue_name" => insert(:queue).name,
+        "interval_seconds" => 60,
+        "worker_module" => @worker,
+        "payload" => payload
+      }
+    end
+
+    test "POST /api/jobs 422s for a bad url", %{conn: conn} do
+      assert %{"error" => error} =
+               conn |> post(~p"/api/jobs", raw_job(%{"url" => "nope"})) |> json_response(422)
+
+      assert error =~ "payload url:"
+    end
+
+    test "POST /api/jobs 422s for a framing header", %{conn: conn} do
+      payload = %{"url" => @url, "headers" => %{"Host" => "internal"}}
+
+      assert %{"error" => error} =
+               conn |> post(~p"/api/jobs", raw_job(payload)) |> json_response(422)
+
+      assert error =~ "Host is set by the service"
+    end
+
+    test "POST /api/jobs 422s for a non-receiver url in demo_receivers mode", %{conn: conn} do
+      set_env(:webhooks, targets: :demo_receivers)
+
+      assert %{"error" => error} =
+               conn |> post(~p"/api/jobs", raw_job(%{"url" => @url})) |> json_response(422)
+
+      assert error =~ "demo receivers"
+    end
+
+    test "POST /api/jobs stores the normalised request", %{conn: conn} do
+      assert %{"data" => job} =
+               conn |> post(~p"/api/jobs", raw_job(%{"url" => @url})) |> json_response(201)
+
+      assert job["payload"]["method"] == "POST"
+      assert job["payload"]["timeout_ms"] == 15_000
+    end
+
+    test "POST /api/jobs also checks an Elixir.-prefixed spelling", %{conn: conn} do
+      params = %{raw_job(%{"url" => "nope"}) | "worker_module" => "Elixir." <> @worker}
+      assert conn |> post(~p"/api/jobs", params) |> json_response(422)
+    end
+
+    test "POST /api/cron_jobs 422s for a bad url", %{conn: conn} do
+      params = raw_cron("raw-bad", %{"url" => "nope"})
+
+      assert %{"error" => error} = conn |> post(~p"/api/cron_jobs", params) |> json_response(422)
+      assert error =~ "payload url:"
+    end
+
+    test "POST /api/cron_jobs 422s for a non-receiver url in demo_receivers mode", %{conn: conn} do
+      set_env(:webhooks, targets: :demo_receivers)
+      params = raw_cron("raw-demo", %{"url" => @url})
+
+      assert %{"error" => error} = conn |> post(~p"/api/cron_jobs", params) |> json_response(422)
+      assert error =~ "demo receivers"
+    end
+
+    test "POST /api/cron_jobs accepts a valid one and defaults max_attempts to 5", %{conn: conn} do
+      params = raw_cron("raw-ok", %{"url" => @url})
+
+      assert %{"data" => cron} = conn |> post(~p"/api/cron_jobs", params) |> json_response(201)
+      assert cron["max_attempts"] == 5
+      assert cron["payload"]["method"] == "POST"
+    end
+
+    test "PATCH /api/cron_jobs/:id checks a new payload for a webhook cron", %{conn: conn} do
+      cron = insert(:cron_job, worker_module: @worker, payload: %{"url" => @url})
+
+      assert %{"error" => error} =
+               conn
+               |> patch(~p"/api/cron_jobs/#{cron.id}", %{"payload" => %{"url" => "nope"}})
+               |> json_response(422)
+
+      assert error =~ "payload url:"
+    end
+  end
+
+  describe "webhook crons" do
+    test "default max_attempts to 5 unless one is given", %{conn: conn} do
+      params = fn name ->
+        %{
+          "name" => name,
+          "queue_name" => insert(:queue).name,
+          "interval_seconds" => 60,
+          "webhook" => %{"url" => @url}
+        }
+      end
+
+      assert %{"data" => %{"max_attempts" => 5}} =
+               conn |> post(~p"/api/cron_jobs", params.("default")) |> json_response(201)
+
+      assert %{"data" => %{"max_attempts" => 2}} =
+               conn
+               |> post(~p"/api/cron_jobs", Map.put(params.("given"), "max_attempts", 2))
+               |> json_response(201)
+    end
+
+    test "index and show redact credential headers", %{conn: conn} do
+      cron =
+        insert(:cron_job,
+          worker_module: "DistributedTaskQueue.Workers.Webhook",
+          payload: %{"url" => @url, "headers" => %{"authorization" => "Bearer s3cret"}}
+        )
+
+      assert %{"data" => crons} = conn |> get(~p"/api/cron_jobs") |> json_response(200)
+      listed = Enum.find(crons, &(&1["id"] == cron.id))
+      assert listed["payload"]["headers"] == %{"authorization" => "••••"}
+
+      assert %{"data" => shown} = conn |> get(~p"/api/cron_jobs/#{cron.id}") |> json_response(200)
+      assert shown["payload"]["headers"] == %{"authorization" => "••••"}
+
+      body = conn |> get(~p"/api/cron_jobs/#{cron.id}") |> response(200)
+      refute body =~ "s3cret"
+    end
+  end
+
   describe "ensure_queue/0" do
     test "boot creates the webhooks queue once and never changes it" do
       assert :ok = Webhooks.ensure_queue()

@@ -37,14 +37,14 @@ defmodule DistributedTaskQueueWeb.WebhookFields do
         placeholder="https://example.com/hooks/orders"
         autocomplete="off"
         phx-debounce="300"
-      />
-      <.input field={@form[:method]} type="select" label="Method" options={methods()} />
-
+      /> <.input field={@form[:method]} type="select" label="Method" options={methods()} />
       <div>
         <.label for={"#{@form.id}_headers_add"}>Headers</.label>
+
         <p class="text-xs text-zinc-500 dark:text-zinc-400">
           Optional extra details sent with the request, such as an API key.
         </p>
+
         <div
           :for={{row, i} <- Enum.with_index(@header_rows)}
           id={"header-row-#{i}"}
@@ -60,6 +60,7 @@ defmodule DistributedTaskQueueWeb.WebhookFields do
               autocomplete="off"
             />
           </div>
+
           <div class="flex-1">
             <.input
               id={"#{@form.id}_headers_#{i}_value"}
@@ -70,11 +71,12 @@ defmodule DistributedTaskQueueWeb.WebhookFields do
               autocomplete="off"
             />
           </div>
-          <.btn size={:sm} phx-click="remove_header" phx-value-index={i} class="mt-2">
-            Remove
-          </.btn>
+
+          <.btn size={:sm} phx-click="remove_header" phx-value-index={i} class="mt-2">Remove</.btn>
         </div>
+
         <.error :for={msg <- field_errors(@form, :headers)}>{msg}</.error>
+
         <.btn size={:sm} id={"#{@form.id}_headers_add"} phx-click="add_header" class="mt-2">
           Add a header
         </.btn>

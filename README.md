@@ -488,6 +488,7 @@ Deliberately listed, because they are the questions worth asking:
 - **Clustering is configured but not yet demonstrated.** `DNSCluster` is wired into the supervision tree and defaults to `:ignore`. Multi-node coordination is correct by construction — every claim path is a row contention — but the deployed proof is still to come.
 - **DNS rebinding between check and connect.** The private-address check resolves the hostname, then the HTTP client resolves it again to connect. A hostile DNS server could answer differently the second time. Pinning the connection to the checked address would close it; it has not been done.
 - **Stored header values are not encrypted at rest.** Credentials a caller puts in webhook `headers` sit in the job payload in plain text. They are redacted on display in the console and API, not protected in the database.
+- **A kept secret follows an edited URL.** In `:any` mode with a public console, editing a webhook cron's URL while leaving a masked header (`••••`) unchanged sends the stored secret to the new URL. Don't run a public console in `:any` mode.
 - **`Retry-After` is ignored.** Every retry uses the same exponential backoff, even when a receiver asks for a specific delay.
 - **Webhook delivery is at-least-once.** Receivers must dedupe on `x-dtq-job-id`; there is no exactly-once mode.
 - **Throughput has a ceiling.** Coordinating through row locks means the database is the bottleneck under a single hot queue. That is the accepted cost of not running a broker.

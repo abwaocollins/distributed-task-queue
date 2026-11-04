@@ -33,7 +33,7 @@ defmodule DistributedTaskQueueWeb.CronJobController do
       {errors, attrs} =
         params
         |> Map.drop(["id" | @update_ignored])
-        |> Webhooks.cron_attrs()
+        |> Webhooks.cron_attrs(cron)
         |> Map.pop("webhook_errors")
 
       with :ok <- check_webhook(cron, attrs, errors),
@@ -107,7 +107,7 @@ defmodule DistributedTaskQueueWeb.CronJobController do
       description: cron.description,
       queue_name: cron.queue_name,
       worker_module: cron.worker_module,
-      payload: cron.payload,
+      payload: Webhooks.redact_payload(cron),
       max_attempts: cron.max_attempts,
       cron_expression: cron.cron_expression,
       interval_seconds: cron.interval_seconds,

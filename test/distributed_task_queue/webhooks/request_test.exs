@@ -101,6 +101,33 @@ defmodule DistributedTaskQueue.Webhooks.RequestTest do
                })
     end
 
+    test "rejects headers that control how the request is framed, in any case" do
+      for {name, shown} <- [
+            {"HOST", "Host"},
+            {"Content-Length", "Content-Length"},
+            {"transfer-ENCODING", "Transfer-Encoding"},
+            {"Connection", "Connection"},
+            {"Keep-Alive", "Keep-Alive"},
+            {"Te", "TE"},
+            {"TRAILER", "Trailer"},
+            {"Upgrade", "Upgrade"},
+            {"eXpect", "Expect"},
+            {"Proxy-Connection", "Proxy-Connection"}
+          ] do
+        assert Request.normalize(%{"url" => "https://x.test", "headers" => %{name => "v"}}) ==
+                 {:error, [headers: "#{shown} is set by the service and can't be supplied"]},
+               "expected #{name} to be refused"
+      end
+    end
+
+    test "still accepts an ordinary header" do
+      assert {:ok, %{"headers" => %{"x-request-id" => "abc"}}} =
+               Request.normalize(%{
+                 "url" => "https://x.test",
+                 "headers" => %{"X-Request-Id" => "abc"}
+               })
+    end
+
     test "returns an error instead of raising for an unencodable body" do
       assert {:error, [{:body, _}]} =
                Request.normalize(%{"url" => "https://example.com", "body" => %{"a" => {1, 2}}})

@@ -40,6 +40,15 @@ defmodule DistributedTaskQueue.WebhooksTest do
       assert String.valid?(d.response_body)
     end
 
+    test "replaces each invalid byte with U+FFFD" do
+      job = insert(:job)
+
+      {:ok, d} =
+        Webhooks.record_delivery(job, %{response_body: "a" <> <<0xFF>> <> "b" <> <<0xC3>>})
+
+      assert d.response_body == "a�b�"
+    end
+
     test "strips NUL bytes from the response body, error and url" do
       job = insert(:job)
 

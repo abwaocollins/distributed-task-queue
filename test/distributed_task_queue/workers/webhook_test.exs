@@ -263,6 +263,18 @@ content-length: 0
     assert Webhooks.list_deliveries(job.id) == []
   end
 
+  test "a stored job with a framing header dead-letters without sending" do
+    base = HttpReceiver.start(respond(200))
+    job = webhook_job(%{"url" => base, "headers" => %{"Content-Length" => "0"}})
+
+    job = run(job)
+    assert job.status == "discarded"
+    assert job.error_message =~ "Content-Length is set by the service"
+
+    refute_receive {:received, _, _, _, _}, 100
+    assert Webhooks.list_deliveries(job.id) == []
+  end
+
   test "stores a huge response truncated" do
     base = HttpReceiver.start(respond(200, String.duplicate("x", 100_000)))
     job = webhook_job(%{"url" => base})

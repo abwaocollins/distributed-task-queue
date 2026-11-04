@@ -23,7 +23,7 @@ defmodule DistributedTaskQueueWeb.DemoControls do
           >
             <div class="min-w-0">
               <p class="text-sm font-medium capitalize text-zinc-900 dark:text-zinc-100">{r.name}</p>
-              
+
               <p class={[
                 "text-xs",
                 if(r.online,
@@ -34,7 +34,7 @@ defmodule DistributedTaskQueueWeb.DemoControls do
                 {status_text(r)}
               </p>
             </div>
-            
+
             <.btn size={:sm} phx-click="toggle_receiver" phx-value-name={r.name}>
               {if r.online, do: "Take offline", else: "Bring online"}
             </.btn>
@@ -50,5 +50,5 @@ defmodule DistributedTaskQueueWeb.DemoControls do
   defp status_text(%{offline_until: nil}), do: "Offline"
 
   defp status_text(%{offline_until: until}),
-    do: "Offline — back online at #{hhmm(until)}"
+    do: "Offline — back online at #{hhmm(until)} UTC"
 end

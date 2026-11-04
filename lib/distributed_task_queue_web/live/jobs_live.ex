@@ -128,14 +128,26 @@ defmodule DistributedTaskQueueWeb.JobsLive do
   def handle_event("save", %{"job" => %{"kind" => "worker"} = params}, socket) do
     {changeset, text} = build_job(params)
 
+    # Picking the webhook worker here with a raw payload gets the same checks
+    # as the webhook form, so it can't be used to skip them.
     with true <- changeset.valid?,
-         {:ok, job} <- DistributedTaskQueue.add_job(params["queue_name"], changeset.params) do
+         {:ok, attrs} <- Webhooks.validate_worker_attrs(changeset.params),
+         {:ok, job} <- DistributedTaskQueue.add_job(params["queue_name"], attrs) do
       {:noreply, created(socket, job)}
     else
       false ->
         {:noreply,
          assign(socket,
            form: to_form(%{changeset | action: :insert}, as: :job),
+           payload_text: text
+         )}
+
+      {:error, [_ | _] = messages} ->
+        failed = Enum.reduce(messages, changeset, &Ecto.Changeset.add_error(&2, :payload, &1))
+
+        {:noreply,
+         assign(socket,
+           form: to_form(%{failed | action: :insert}, as: :job),
            payload_text: text
          )}
 

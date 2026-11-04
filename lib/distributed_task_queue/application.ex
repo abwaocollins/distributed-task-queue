@@ -24,6 +24,11 @@ defmodule DistributedTaskQueue.Application do
         optional_child(:start_reaper, DistributedTaskQueue.Reaper) ++
         [DistributedTaskQueue.QueueBootstrapper] ++
         # Seeds demo queues and crons before the scheduler starts reading them.
+        # Both start before the Endpoint, as do the queue managers that run
+        # demo and webhook jobs, so nothing on this path may call
+        # Endpoint.url/0: Target.demo_receiver_url/1 reads the endpoint config
+        # instead. That keeps this order (and Reaper before QueueBootstrapper)
+        # without delaying job processing until the web server is up.
         optional_child(:demo_mode, DistributedTaskQueue.Demo, false) ++
         optional_child(:start_cron_scheduler, DistributedTaskQueue.CronScheduler) ++
         [DistributedTaskQueueWeb.Endpoint]

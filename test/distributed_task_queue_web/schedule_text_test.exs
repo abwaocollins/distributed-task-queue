@@ -24,6 +24,7 @@ defmodule DistributedTaskQueueWeb.ScheduleTextTest do
     assert ScheduleText.describe(cron("0 9 * * 7")) == "Every Sunday at 09:00"
     assert ScheduleText.describe(cron("*/15 * * * *")) == "Every 15 minutes"
     assert ScheduleText.describe(cron("* * * * *")) == "Every minute"
+    assert ScheduleText.describe(cron("*/1 * * * *")) == "Every minute"
     assert ScheduleText.describe(cron("5 * * * *")) == "Every hour at :05"
     assert ScheduleText.describe(cron("0 0 1 * *")) == "On day 1 of every month at 00:00"
   end

@@ -18,6 +18,23 @@ defmodule DistributedTaskQueue.Webhooks.Request do
   # Control characters except tab, plus DEL.
   @bad_value_chars ~r/[\x00-\x08\x0A-\x1F\x7F]/
 
+  # Headers that decide how the request is framed on the wire. The HTTP client
+  # sends a caller's copy instead of computing its own, so a wrong Host or
+  # Content-Length would let a caller smuggle a second request to the
+  # receiver. Lowercased name => how it is written in messages.
+  @framing_headers %{
+    "host" => "Host",
+    "content-length" => "Content-Length",
+    "transfer-encoding" => "Transfer-Encoding",
+    "connection" => "Connection",
+    "keep-alive" => "Keep-Alive",
+    "te" => "TE",
+    "trailer" => "Trailer",
+    "upgrade" => "Upgrade",
+    "expect" => "Expect",
+    "proxy-connection" => "Proxy-Connection"
+  }
+
   # A header is treated as a credential when its name contains one of these.
   # Substring matching is deliberately broad: hiding a harmless header costs
   # nothing, leaking a token does.
@@ -149,6 +166,9 @@ defmodule DistributedTaskQueue.Webhooks.Request do
       not Enum.all?(headers, fn {k, _} -> Regex.match?(@header_name, k) end) ->
         {:error,
          {:headers, "names must be non-empty tokens without whitespace or control characters"}}
+
+      framing = Enum.find_value(headers, fn {k, _} -> @framing_headers[String.downcase(k)] end) ->
+        {:error, {:headers, "#{framing} is set by the service and can't be supplied"}}
 
       # CR/LF in a value would let a caller inject extra headers.
       not Enum.all?(headers, fn {_, v} -> not Regex.match?(@bad_value_chars, v) end) ->

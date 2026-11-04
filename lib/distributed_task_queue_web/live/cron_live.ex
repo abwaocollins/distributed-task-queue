@@ -171,16 +171,22 @@ defmodule DistributedTaskQueueWeb.CronLive do
   def handle_event("save", %{"cron" => params}, socket) do
     {changeset, text, type} = build(socket.assigns.editing, params)
 
-    if changeset.valid? do
-      save(socket, changeset.params)
+    # Picking the webhook worker here with a raw payload gets the same checks
+    # as the webhook form, so it can't be used to skip them.
+    with true <- changeset.valid?,
+         {:ok, attrs} <- Webhooks.validate_worker_attrs(changeset.params) do
+      save(socket, attrs)
     else
-      {:noreply,
-       assign(socket,
-         kind: "worker",
-         form: to_form(%{changeset | action: :insert}, as: :cron),
-         payload_text: text,
-         schedule_type: type
-       )}
+      result ->
+        changeset = add_payload_errors(changeset, result)
+
+        {:noreply,
+         assign(socket,
+           kind: "worker",
+           form: to_form(%{changeset | action: :insert}, as: :cron),
+           payload_text: text,
+           schedule_type: type
+         )}
     end
   end
 
@@ -335,6 +341,11 @@ defmodule DistributedTaskQueueWeb.CronLive do
 
     {changeset, text, type}
   end
+
+  defp add_payload_errors(changeset, {:error, messages}),
+    do: Enum.reduce(messages, changeset, &Ecto.Changeset.add_error(&2, :payload, &1))
+
+  defp add_payload_errors(changeset, _invalid), do: changeset
 
   defp blank_to_nil(v) when v in [nil, ""], do: nil
   defp blank_to_nil(v), do: v

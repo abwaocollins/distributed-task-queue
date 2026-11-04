@@ -310,6 +310,19 @@ defmodule DistributedTaskQueueWeb.ConsoleLiveTest do
       assert has_element?(view, "#job-error", "The server answered 500 on every attempt")
     end
 
+    test "the error title tells a permanent failure from used-up retries", %{conn: conn} do
+      dead = [status: "discarded", dead_letter: true, error_message: "boom", max_attempts: 5]
+      permanent = webhook_job([attempts: 0] ++ dead)
+      exhausted = webhook_job([attempts: 4] ++ dead)
+
+      {:ok, _view, html} = live(conn, ~p"/jobs/#{permanent.id}")
+      assert html =~ "Failed permanently — retrying would not help."
+      refute html =~ "Failed on every attempt"
+
+      {:ok, _view, html} = live(conn, ~p"/jobs/#{exhausted.id}")
+      assert html =~ "Failed on every attempt"
+    end
+
     test "non-webhook jobs keep the raw payload panel", %{conn: conn} do
       job = insert(:job)
       {:ok, view, _html} = live(conn, ~p"/jobs/#{job.id}")
@@ -710,7 +723,7 @@ defmodule DistributedTaskQueueWeb.ConsoleLiveTest do
 
       view |> element("#receiver-warehouse button") |> render_click()
       refute Receivers.online?("warehouse")
-      assert render(view) =~ "back online at"
+      assert render(view) =~ ~r/back online at \d\d:\d\d UTC/
 
       view |> element("#receiver-warehouse button") |> render_click()
       assert Receivers.online?("warehouse")

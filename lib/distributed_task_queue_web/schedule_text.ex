@@ -39,6 +39,9 @@ defmodule DistributedTaskQueueWeb.ScheduleText do
   defp text(%{minute: [:*], hour: [:*], day: [:*], month: [:*], weekday: [:*]}),
     do: "Every minute"
 
+  defp text(%{minute: [{:/, :*, 1}], hour: [:*], day: [:*], month: [:*], weekday: [:*]}),
+    do: "Every minute"
+
   defp text(%{minute: [{:/, :*, n}], hour: [:*], day: [:*], month: [:*], weekday: [:*]}),
     do: "Every #{n} minutes"
 

@@ -86,26 +86,102 @@ defmodule DistributedTaskQueue.Webhooks do
   Turns a cron API payload with a `webhook` object into a webhook cron: sets
   the worker and the normalised request as payload. When the request is
   invalid the messages are left under `"webhook_errors"` for the caller to
-  report. Params without `webhook` pass through unchanged.
+  report.
+
+  Params that name the webhook worker directly, with a raw `payload`, get the
+  same checks (see `validate_worker_attrs/2`). `existing` is the cron being
+  updated, or nil when creating; a new webhook cron defaults to
+  #{@default_max_attempts} attempts. Any other params pass through unchanged.
   """
-  @spec cron_attrs(map) :: map
-  def cron_attrs(%{"webhook" => webhook} = params) when is_map(webhook) do
+  @spec cron_attrs(map, struct | nil) :: map
+  def cron_attrs(params, existing \\ nil)
+
+  def cron_attrs(%{"webhook" => webhook} = params, existing) when is_map(webhook) do
     params = Map.delete(params, "webhook")
 
     case validate_request(webhook) do
       {:ok, payload} ->
-        Map.merge(params, %{"worker_module" => Worker.module_name(), "payload" => payload})
+        params
+        |> Map.merge(%{"worker_module" => Worker.module_name(), "payload" => payload})
+        |> default_max_attempts(existing)
 
       {:error, :payload, messages} ->
         Map.put(params, "webhook_errors", messages)
     end
   end
 
-  def cron_attrs(%{"webhook" => _} = params) do
+  def cron_attrs(%{"webhook" => _} = params, _existing) do
     params |> Map.delete("webhook") |> Map.put("webhook_errors", ["webhook: must be an object"])
   end
 
-  def cron_attrs(params), do: params
+  def cron_attrs(params, existing) do
+    case validate_worker_attrs(params, existing) do
+      {:ok, attrs} ->
+        if webhook_worker?(attrs["worker_module"]),
+          do: default_max_attempts(attrs, existing),
+          else: attrs
+
+      {:error, messages} ->
+        Map.put(params, "webhook_errors", messages)
+    end
+  end
+
+  defp default_max_attempts(params, nil),
+    do: Map.put_new(params, "max_attempts", @default_max_attempts)
+
+  defp default_max_attempts(params, _existing), do: params
+
+  @doc """
+  Validates job or cron attrs that name the webhook worker directly, so a raw
+  `worker_module` + `payload` can't skip the checks `enqueue/1` runs. On
+  success the payload is replaced by the normalised request. Attrs for any
+  other worker come back unchanged.
+
+  `existing` is the record being updated, if any: its worker and payload
+  count when `attrs` leave them out. When `attrs` change neither, nothing is
+  checked, so renaming a cron does not cost a DNS lookup.
+  """
+  @spec validate_worker_attrs(map, struct | nil) :: {:ok, map} | {:error, [String.t()]}
+  def validate_worker_attrs(attrs, existing \\ nil) do
+    worker = Map.get(attrs, "worker_module", existing && existing.worker_module)
+    touched? = Map.has_key?(attrs, "worker_module") or Map.has_key?(attrs, "payload")
+
+    if touched? and webhook_worker?(worker) do
+      case validate_request(Map.get(attrs, "payload", existing && existing.payload)) do
+        {:ok, payload} ->
+          {:ok,
+           Map.merge(attrs, %{"worker_module" => Worker.module_name(), "payload" => payload})}
+
+        {:error, :payload, messages} ->
+          {:error, messages}
+      end
+    else
+      {:ok, attrs}
+    end
+  end
+
+  @doc """
+  True when `worker_module` resolves to the webhook worker. Resolving rather
+  than comparing strings also catches other spellings, such as an `Elixir.`
+  prefix, that would run the same worker.
+  """
+  @spec webhook_worker?(term) :: boolean
+  def webhook_worker?(worker_module),
+    do: DistributedTaskQueue.Worker.resolve(worker_module) == {:ok, Worker}
+
+  @doc """
+  The payload of a job or cron, safe to show: for the webhook worker, the
+  value of every credential-like header is masked.
+  """
+  @spec redact_payload(%{worker_module: term, payload: term}) :: term
+  def redact_payload(%{worker_module: module, payload: %{"headers" => headers} = payload})
+      when is_map(headers) do
+    if webhook_worker?(module),
+      do: Map.put(payload, "headers", Request.redact_headers(headers)),
+      else: payload
+  end
+
+  def redact_payload(%{payload: payload}), do: payload
 
   @doc "Adds each message as an error on `field` of an empty changeset for `struct`."
   @spec error_changeset(struct, atom, [String.t()]) :: Ecto.Changeset.t()
@@ -115,6 +191,7 @@ defmodule DistributedTaskQueue.Webhooks do
 
   # Normalise first; only a well-formed request is worth a DNS lookup. An
   # unresolvable host is refused here too, since the caller can simply retry.
+  # Anything that is not a map gets normalize/1's "url is required".
   defp validate_request(params) do
     case Request.normalize(params) do
       {:ok, payload} ->
@@ -206,10 +283,21 @@ defmodule DistributedTaskQueue.Webhooks do
   # backing off so a multi-byte codepoint is never split.
   defp scrub(value, limit) do
     value
-    |> String.replace_invalid()
+    |> replace_invalid()
     |> String.replace(<<0>>, "")
     |> cut(limit)
   end
+
+  # String.replace_invalid/1 does this, but it needs Elixir 1.16 and the
+  # project still supports 1.15. Each byte that does not start a valid
+  # codepoint becomes U+FFFD.
+  defp replace_invalid(s), do: replace_invalid(s, [])
+
+  defp replace_invalid(<<c::utf8, rest::binary>>, acc),
+    do: replace_invalid(rest, [acc, <<c::utf8>>])
+
+  defp replace_invalid(<<_byte, rest::binary>>, acc), do: replace_invalid(rest, [acc, "�"])
+  defp replace_invalid(<<>>, acc), do: IO.iodata_to_binary(acc)
 
   defp cut(s, :infinity), do: s
 

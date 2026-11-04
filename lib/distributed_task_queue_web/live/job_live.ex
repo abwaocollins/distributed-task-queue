@@ -288,6 +288,13 @@ defmodule DistributedTaskQueueWeb.JobLive do
     _ -> nil
   end
 
+  # A discard doesn't count as an attempt, so a job that used them all up was
+  # discarded on attempt number max_attempts, i.e. attempts + 1. Anything
+  # earlier was a permanent failure that skipped the remaining retries.
+  defp error_title(%{dead_letter: true, attempts: attempts, max_attempts: max})
+       when attempts + 1 < max,
+       do: "Failed permanently — retrying would not help."
+
   defp error_title(%{dead_letter: true}), do: "Failed on every attempt. This is the last error."
   defp error_title(%{status: "retryable"}), do: "Last attempt failed. It will be retried."
   defp error_title(_), do: "Last recorded error"

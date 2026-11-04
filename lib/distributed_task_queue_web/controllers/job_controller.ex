@@ -1,8 +1,7 @@
 defmodule DistributedTaskQueueWeb.JobController do
   use DistributedTaskQueueWeb, :controller
 
-  alias DistributedTaskQueue.Webhooks
-  alias DistributedTaskQueue.Webhooks.Request
+  alias DistributedTaskQueue.{Job, Webhooks}
   alias DistributedTaskQueue.Workers.Webhook
   alias DistributedTaskQueueWeb.ChangesetErrors
 
@@ -20,7 +19,16 @@ defmodule DistributedTaskQueueWeb.JobController do
 
   def create(conn, params) do
     queue_name = params["queue_name"] || params[:queue_name]
-    case DistributedTaskQueue.add_job(queue_name, params) do
+
+    # A job naming the webhook worker gets the same request and target checks
+    # as POST /api/webhooks, so this route can't be used to skip them.
+    result =
+      case Webhooks.validate_worker_attrs(params) do
+        {:ok, attrs} -> DistributedTaskQueue.add_job(queue_name, attrs)
+        {:error, messages} -> {:error, Webhooks.error_changeset(%Job{}, :payload, messages)}
+      end
+
+    case result do
       {:ok, job} ->
         conn |> put_status(:created) |> json(%{data: job_json(job)})
 
@@ -67,17 +75,12 @@ defmodule DistributedTaskQueueWeb.JobController do
     if module == Webhook.module_name() do
       job
       |> base_json()
-      |> Map.update!(:payload, &redact_payload/1)
+      |> Map.put(:payload, Webhooks.redact_payload(job))
       |> Map.put(:deliveries, Enum.map(Webhooks.list_deliveries(job.id), &delivery_json/1))
     else
       base_json(job)
     end
   end
-
-  defp redact_payload(%{"headers" => headers} = payload) when is_map(headers),
-    do: Map.put(payload, "headers", Request.redact_headers(headers))
-
-  defp redact_payload(payload), do: payload
 
   defp delivery_json(d) do
     %{

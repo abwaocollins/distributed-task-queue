@@ -19,6 +19,8 @@ defmodule DistributedTaskQueue.Webhooks.Target do
   @demo_receiver_names ["payments", "email", "warehouse"]
 
   # Bounds each DNS lookup so a slow resolver can't stall enqueue or a worker.
+  # The IPv4 and IPv6 lookups run one after the other, so a check can wait up
+  # to twice this.
   @dns_timeout_ms 5_000
 
   @type reason :: :private_address | :unresolvable | :not_a_demo_receiver
@@ -48,9 +50,15 @@ defmodule DistributedTaskQueue.Webhooks.Target do
     end
   end
 
-  @doc "The URL of the named demo receiver on this app's endpoint."
+  @doc """
+  The URL of the named demo receiver on this app's endpoint.
+
+  Built from the endpoint's config rather than `Endpoint.url/0`, which raises
+  until the endpoint has started. Demo seeding and the queue managers both
+  start before the endpoint and both need this URL.
+  """
   @spec demo_receiver_url(String.t()) :: String.t()
-  def demo_receiver_url(name), do: Endpoint.url() <> "/demo/receivers/" <> name
+  def demo_receiver_url(name), do: endpoint_url() <> "/demo/receivers/" <> name
 
   @doc "The names of the built-in demo receivers."
   @spec demo_receiver_names() :: [String.t()]
@@ -68,6 +76,32 @@ defmodule DistributedTaskQueue.Webhooks.Target do
     do:
       "This demo only sends to its own demo receivers: " <>
         Enum.join(@demo_receiver_names, ", ") <> "."
+
+  # Derived the way Phoenix derives Endpoint.url/0: the :url config wins,
+  # falling back to the scheme and port the endpoint listens on. URI drops a
+  # default port, as Phoenix does.
+  defp endpoint_url do
+    config = Application.get_env(:distributed_task_queue, Endpoint, [])
+    url = config[:url] || []
+    {scheme, port} = listening(config)
+
+    URI.to_string(%URI{
+      scheme: url[:scheme] || scheme,
+      host: url[:host] || "localhost",
+      port: to_port(url[:port] || port)
+    })
+  end
+
+  defp listening(config) do
+    cond do
+      config[:https] -> {"https", config[:https][:port] || 443}
+      config[:http] -> {"http", config[:http][:port] || 80}
+      true -> {"http", 80}
+    end
+  end
+
+  defp to_port(port) when is_binary(port), do: String.to_integer(port)
+  defp to_port(port), do: port
 
   defp check_demo_receiver(url) do
     allowed = Enum.map(@demo_receiver_names, &normalise(demo_receiver_url(&1)))
@@ -135,16 +169,22 @@ defmodule DistributedTaskQueue.Webhooks.Target do
   defp blocked?({169, 254, _, _}), do: true
   defp blocked?({172, b, _, _}) when b in 16..31, do: true
   defp blocked?({192, 168, _, _}), do: true
+  # Multicast (224.0.0.0/4) and reserved (240.0.0.0/4, incl. broadcast).
+  defp blocked?({a, _, _, _}) when a >= 224, do: true
   defp blocked?({_, _, _, _}), do: false
 
   defp blocked?({0, 0, 0, 0, 0, 0, 0, 0}), do: true
   defp blocked?({0, 0, 0, 0, 0, 0, 0, 1}), do: true
   defp blocked?({a, _, _, _, _, _, _, _}) when (a &&& 0xFE00) == 0xFC00, do: true
   defp blocked?({a, _, _, _, _, _, _, _}) when (a &&& 0xFFC0) == 0xFE80, do: true
+  defp blocked?({a, _, _, _, _, _, _, _}) when (a &&& 0xFF00) == 0xFF00, do: true
 
-  # IPv4-mapped (::ffff:a.b.c.d) reaches the IPv4 address it embeds.
-  defp blocked?({0, 0, 0, 0, 0, 0xFFFF, hi, lo}),
-    do: blocked?({hi >>> 8, hi &&& 0xFF, lo >>> 8, lo &&& 0xFF})
+  # IPv4-mapped (::ffff:a.b.c.d) and NAT64 (64:ff9b::a.b.c.d) both reach the
+  # IPv4 address they embed.
+  defp blocked?({0, 0, 0, 0, 0, 0xFFFF, hi, lo}), do: blocked?(embedded_ipv4(hi, lo))
+  defp blocked?({0x64, 0xFF9B, 0, 0, 0, 0, hi, lo}), do: blocked?(embedded_ipv4(hi, lo))
 
   defp blocked?({_, _, _, _, _, _, _, _}), do: false
+
+  defp embedded_ipv4(hi, lo), do: {hi >>> 8, hi &&& 0xFF, lo >>> 8, lo &&& 0xFF}
 end
