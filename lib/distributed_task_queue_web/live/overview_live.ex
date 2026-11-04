@@ -3,6 +3,7 @@ defmodule DistributedTaskQueueWeb.OverviewLive do
   use DistributedTaskQueueWeb, :live_view
 
   alias DistributedTaskQueue.Dashboard
+  alias DistributedTaskQueueWeb.ScheduleText
 
   @impl true
   def mount(_params, _session, socket) do
@@ -169,8 +170,8 @@ defmodule DistributedTaskQueueWeb.OverviewLive do
                   <p class="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
                     {cron.name}
                   </p>
-                  <p class="font-mono text-xs text-zinc-500 dark:text-zinc-400">
-                    {schedule(cron)}
+                  <p class="text-xs text-zinc-500 dark:text-zinc-400" title={schedule(cron)}>
+                    {ScheduleText.describe(cron)}
                   </p>
                 </div>
                 <.rel_time

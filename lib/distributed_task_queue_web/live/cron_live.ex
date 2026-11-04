@@ -2,8 +2,17 @@ defmodule DistributedTaskQueueWeb.CronLive do
   @moduledoc "Cron jobs with create, edit, enable/disable and delete."
   use DistributedTaskQueueWeb, :live_view
 
-  alias DistributedTaskQueue.{CronJob, Dashboard, Events}
-  alias DistributedTaskQueueWeb.{JsonField, LiveRefresh}
+  alias DistributedTaskQueue.{CronJob, Dashboard, Events, Webhooks}
+  alias DistributedTaskQueue.Webhooks.{Request, Target}
+  alias DistributedTaskQueue.Workers.Webhook, as: WebhookWorker
+
+  alias DistributedTaskQueueWeb.{
+    JsonField,
+    LiveRefresh,
+    ScheduleText,
+    WebhookFields,
+    WebhookForm
+  }
 
   @impl true
   def mount(_params, _session, socket) do
@@ -14,7 +23,8 @@ defmodule DistributedTaskQueueWeb.CronLive do
        nav: :cron,
        workers: Dashboard.known_workers(),
        timezones: Tzdata.zone_list(),
-       config_names: Dashboard.config_cron_names()
+       config_names: Dashboard.config_cron_names(),
+       targets: Webhooks.targets()
      )
      |> refresh()}
   end
@@ -31,7 +41,16 @@ defmodule DistributedTaskQueueWeb.CronLive do
   def handle_params(params, _url, socket), do: {:noreply, apply_action(socket, params)}
 
   defp apply_action(%{assigns: %{live_action: :new}} = socket, _params) do
-    cron = %CronJob{payload: %{}, max_attempts: 3, overlap: false, enabled: true}
+    queue = if "webhooks" in Dashboard.queue_names(), do: "webhooks"
+
+    cron = %CronJob{
+      payload: %{},
+      max_attempts: 3,
+      overlap: false,
+      enabled: true,
+      queue_name: queue
+    }
+
     open_form(socket, cron, "cron")
   end
 
@@ -50,55 +69,127 @@ defmodule DistributedTaskQueueWeb.CronLive do
   defp apply_action(socket, _params), do: assign(socket, editing: nil, form: nil)
 
   defp open_form(socket, cron, schedule_type) do
+    {kind, wh_params, rows} = webhook_state(socket, cron)
+
     assign(socket,
       editing: cron,
       schedule_type: schedule_type,
       payload_text: JsonField.encode(cron.payload),
-      form: to_form(CronJob.changeset(cron, %{}), as: :cron)
+      form: to_form(CronJob.changeset(cron, %{}), as: :cron),
+      kind: kind,
+      header_rows: rows,
+      wh_form: webhook_form(wh_params, [])
     )
   end
 
+  # A new cron starts as a webhook; an existing one is a webhook when it runs
+  # the webhook worker. Credential headers are shown masked: the form never
+  # needs the real value, and `build_webhook/5` puts the stored one back on save.
+  defp webhook_state(socket, %CronJob{worker_module: module, payload: payload} = cron) do
+    cond do
+      cron.id && module == WebhookWorker.module_name() ->
+        params = %{
+          "url" => payload["url"] || "",
+          "method" => payload["method"] || "POST",
+          "body" => payload["body"] || ""
+        }
+
+        {"webhook", params, WebhookForm.rows_for(payload["headers"] || %{})}
+
+      cron.id ->
+        {"worker", webhook_defaults(socket), []}
+
+      true ->
+        {"webhook", webhook_defaults(socket), []}
+    end
+  end
+
+  defp webhook_defaults(socket) do
+    url =
+      if socket.assigns.targets == :demo_receivers do
+        [name | _] = Target.demo_receiver_names()
+        Target.demo_receiver_url(name)
+      else
+        ""
+      end
+
+    %{"url" => url, "method" => "POST", "body" => ""}
+  end
+
+  # The webhook map nests under the cron's params, so its inputs are named
+  # cron[webhook][...].
+  defp webhook_form(params, errors),
+    do: to_form(params, as: "cron[webhook]", id: "cron_webhook", errors: errors)
+
   @impl true
+  def handle_event("validate", %{"cron" => %{"kind" => "webhook"} = params}, socket) do
+    wh = Map.merge(webhook_defaults(socket), params["webhook"] || %{})
+    rows = WebhookForm.header_rows(wh, socket.assigns.header_rows)
+    {changeset, wh_errors, type} = build_webhook(socket, params, wh, rows, :validate)
+
+    {:noreply,
+     assign(socket,
+       kind: "webhook",
+       form: to_form(%{changeset | action: :validate}, as: :cron),
+       wh_form: webhook_form(wh, wh_errors),
+       header_rows: rows,
+       schedule_type: type
+     )}
+  end
+
   def handle_event("validate", %{"cron" => params}, socket) do
     {changeset, text, type} = build(socket.assigns.editing, params)
 
     {:noreply,
      assign(socket,
+       kind: "worker",
        form: to_form(%{changeset | action: :validate}, as: :cron),
        payload_text: text,
        schedule_type: type
      )}
   end
 
+  def handle_event("save", %{"cron" => %{"kind" => "webhook"} = params}, socket) do
+    wh = Map.merge(webhook_defaults(socket), params["webhook"] || %{})
+    rows = WebhookForm.header_rows(wh, socket.assigns.header_rows)
+    {changeset, wh_errors, type} = build_webhook(socket, params, wh, rows, :save)
+
+    if changeset.valid? and wh_errors == [] do
+      save(socket, changeset.params)
+    else
+      {:noreply,
+       assign(socket,
+         kind: "webhook",
+         form: to_form(%{changeset | action: :insert}, as: :cron),
+         wh_form: webhook_form(wh, wh_errors),
+         header_rows: rows,
+         schedule_type: type
+       )}
+    end
+  end
+
   def handle_event("save", %{"cron" => params}, socket) do
     {changeset, text, type} = build(socket.assigns.editing, params)
-    attrs = changeset.params
 
-    result =
-      cond do
-        not changeset.valid? -> {:error, %{changeset | action: :insert}}
-        socket.assigns.live_action == :new -> DistributedTaskQueue.create_cron_job(attrs)
-        true -> DistributedTaskQueue.update_cron_job(socket.assigns.editing, attrs)
-      end
-
-    case result do
-      {:ok, cron} ->
-        Events.broadcast([:dtq, :console, :cron_changed], %{cron_job_id: cron.id})
-
-        {:noreply,
-         socket
-         |> put_flash(:info, "Cron job #{cron.name} saved.")
-         |> push_patch(to: ~p"/cron")
-         |> LiveRefresh.refresh()}
-
-      {:error, failed} ->
-        {:noreply,
-         assign(socket,
-           form: to_form(failed, as: :cron),
-           payload_text: text,
-           schedule_type: type
-         )}
+    if changeset.valid? do
+      save(socket, changeset.params)
+    else
+      {:noreply,
+       assign(socket,
+         kind: "worker",
+         form: to_form(%{changeset | action: :insert}, as: :cron),
+         payload_text: text,
+         schedule_type: type
+       )}
     end
+  end
+
+  def handle_event("add_header", _params, socket),
+    do: {:noreply, update(socket, :header_rows, &(&1 ++ [%{key: "", value: ""}]))}
+
+  def handle_event("remove_header", %{"index" => index}, socket) do
+    rows = List.delete_at(socket.assigns.header_rows, String.to_integer(index))
+    {:noreply, assign(socket, header_rows: rows)}
   end
 
   def handle_event("toggle", %{"id" => id}, socket) do
@@ -139,20 +230,101 @@ defmodule DistributedTaskQueueWeb.CronLive do
     {:noreply, LiveRefresh.refresh(socket)}
   end
 
+  defp save(socket, attrs) do
+    result =
+      if socket.assigns.live_action == :new,
+        do: DistributedTaskQueue.create_cron_job(attrs),
+        else: DistributedTaskQueue.update_cron_job(socket.assigns.editing, attrs)
+
+    case result do
+      {:ok, cron} ->
+        Events.broadcast([:dtq, :console, :cron_changed], %{cron_job_id: cron.id})
+
+        {:noreply,
+         socket
+         |> put_flash(:info, "Cron job #{cron.name} saved.")
+         |> push_patch(to: ~p"/cron")
+         |> LiveRefresh.refresh()}
+
+      {:error, failed} ->
+        {:noreply, assign(socket, form: to_form(failed, as: :cron))}
+    end
+  end
+
+  # Typing must stay cheap, so validating only runs the offline request checks.
+  # Saving goes through `Webhooks.cron_attrs/1`, the call the API makes, which
+  # also checks the target (a DNS lookup). Returns the cron changeset and the
+  # request's errors for the webhook fields.
+  defp build_webhook(socket, params, wh, rows, mode) do
+    type = schedule_type(params)
+    stored = stored_request(socket.assigns)
+
+    request =
+      wh
+      |> WebhookForm.request_attrs(rows)
+      |> Map.update!("headers", &Request.merge_masked(&1, stored["headers"] || %{}))
+      |> Map.put("timeout_ms", stored["timeout_ms"])
+
+    {payload, wh_errors} = request_payload(request, mode)
+
+    cron_params =
+      params
+      |> Map.drop(["kind", "webhook", "payload"])
+      |> Map.merge(%{"worker_module" => WebhookWorker.module_name(), "payload" => payload})
+      |> normalize_schedule(type)
+
+    {CronJob.changeset(socket.assigns.editing, cron_params), wh_errors, type}
+  end
+
+  defp request_payload(request, :validate) do
+    case Request.normalize(request) do
+      {:ok, payload} ->
+        {payload, []}
+
+      {:error, errors} ->
+        errors = Enum.reject(errors, &(&1 == {:url, "is required"} and request["url"] == ""))
+        {%{}, Enum.map(errors, fn {field, msg} -> {field, {msg, []}} end)}
+    end
+  end
+
+  defp request_payload(request, :save) do
+    {messages, attrs} =
+      %{"webhook" => request} |> Webhooks.cron_attrs() |> Map.pop("webhook_errors")
+
+    case messages do
+      nil -> {attrs["payload"], []}
+      messages -> {%{}, Enum.map(messages, &WebhookForm.payload_error/1)}
+    end
+  end
+
+  # What the cron being edited already sends, so unchanged masked headers keep
+  # their secret and settings the form does not show (the timeout) survive.
+  defp stored_request(%{editing: %CronJob{id: id, worker_module: module, payload: payload}})
+       when not is_nil(id) do
+    if module == WebhookWorker.module_name(), do: payload || %{}, else: %{}
+  end
+
+  defp stored_request(_assigns), do: %{}
+
+  defp schedule_type(params),
+    do: if(params["schedule_type"] == "interval", do: "interval", else: "cron")
+
   # Only one schedule kind is kept; the other field is cleared so the XOR
   # validation sees exactly one. Timezones only mean something for cron
   # expressions.
-  defp build(cron, params) do
-    type = if params["schedule_type"] == "interval", do: "interval", else: "cron"
-    text = params["payload"] || "{}"
+  defp normalize_schedule(params, type) do
+    case type do
+      "cron" -> Map.put(params, "interval_seconds", nil)
+      "interval" -> Map.merge(params, %{"cron_expression" => nil, "timezone" => nil})
+    end
+    |> Map.update("timezone", nil, &blank_to_nil/1)
+    |> Map.update("description", nil, &blank_to_nil/1)
+  end
 
-    params =
-      case type do
-        "cron" -> Map.put(params, "interval_seconds", nil)
-        "interval" -> Map.merge(params, %{"cron_expression" => nil, "timezone" => nil})
-      end
-      |> Map.update("timezone", nil, &blank_to_nil/1)
-      |> Map.update("description", nil, &blank_to_nil/1)
+  defp build(cron, params) do
+    type = schedule_type(params)
+    text = params["payload"] || "{}"
+    params = normalize_schedule(params, type)
 
     {decoded, json_error} = JsonField.decode(params, "payload")
 
@@ -228,10 +400,9 @@ defmodule DistributedTaskQueueWeb.CronLive do
               </p>
             </td>
             <td class={td_class()}>
-              <span class="font-mono text-xs text-zinc-700 dark:text-zinc-300">{schedule(cron)}</span>
-              <p :if={cron.timezone} class="text-xs text-zinc-500 dark:text-zinc-400">
-                {cron.timezone}
-              </p>
+              <span class="text-zinc-700 dark:text-zinc-300" title={schedule(cron)}>
+                {ScheduleText.describe(cron)}
+              </span>
             </td>
             <td class={td_class()}>
               <span class={Map.has_key?(@missing, cron.name) && "text-rose-700 dark:text-rose-300"}>
@@ -293,6 +464,14 @@ defmodule DistributedTaskQueueWeb.CronLive do
         is re-applied.
       </p>
       <.simple_form for={@form} id="cron-form" phx-change="validate" phx-submit="save">
+        <.input
+          id="cron_kind"
+          name="cron[kind]"
+          type="select"
+          label="What should this cron job do?"
+          value={@kind}
+          options={[{"Call a URL", "webhook"}, {"Run an Elixir worker", "worker"}]}
+        />
         <div class="grid gap-6 sm:grid-cols-2">
           <.input field={@form[:name]} label="Name" autocomplete="off" phx-debounce="300" />
           <.input
@@ -303,7 +482,14 @@ defmodule DistributedTaskQueueWeb.CronLive do
             options={@queue_names}
           />
         </div>
+        <WebhookFields.fields
+          :if={@kind == "webhook"}
+          form={@wh_form}
+          targets={@targets}
+          header_rows={@header_rows}
+        />
         <.input
+          :if={@kind == "worker"}
           field={@form[:worker_module]}
           label="Worker module"
           list="cron-workers"
@@ -311,7 +497,7 @@ defmodule DistributedTaskQueueWeb.CronLive do
           autocomplete="off"
           phx-debounce="300"
         />
-        <datalist id="cron-workers">
+        <datalist :if={@kind == "worker"} id="cron-workers">
           <option :for={w <- @workers} value={w} />
         </datalist>
 
@@ -370,6 +556,7 @@ defmodule DistributedTaskQueueWeb.CronLive do
         />
 
         <.input
+          :if={@kind == "worker"}
           id="cron_payload"
           name="cron[payload]"
           type="textarea"

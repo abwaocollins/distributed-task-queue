@@ -7,7 +7,7 @@ defmodule DistributedTaskQueueWeb.JobsLive do
 
   alias DistributedTaskQueue.{Dashboard, Events, Job, Webhooks}
   alias DistributedTaskQueue.Webhooks.{Request, Target}
-  alias DistributedTaskQueueWeb.{CoreComponents, JsonField, LiveRefresh, WebhookFields}
+  alias DistributedTaskQueueWeb.{CoreComponents, JsonField, LiveRefresh, WebhookFields, WebhookForm}
 
   @filter_keys ~w(queue status errors q)
 
@@ -110,7 +110,7 @@ defmodule DistributedTaskQueueWeb.JobsLive do
   # check (a DNS lookup) waits for the save.
   def handle_event("validate", %{"job" => params}, socket) do
     params = Map.merge(webhook_defaults(socket, socket.assigns.targets), params)
-    rows = header_rows(params, socket.assigns.header_rows)
+    rows = WebhookForm.header_rows(params, socket.assigns.header_rows)
     {attrs, local_errors} = webhook_attrs(params, rows)
 
     request_errors =
@@ -146,7 +146,7 @@ defmodule DistributedTaskQueueWeb.JobsLive do
 
   def handle_event("save", %{"job" => params}, socket) do
     params = Map.merge(webhook_defaults(socket, socket.assigns.targets), params)
-    rows = header_rows(params, socket.assigns.header_rows)
+    rows = WebhookForm.header_rows(params, socket.assigns.header_rows)
 
     result =
       case webhook_attrs(params, rows) do
@@ -211,31 +211,17 @@ defmodule DistributedTaskQueueWeb.JobsLive do
   # job's fields live inside its payload, so there is no schema to cast into.
   defp webhook_form(params, errors), do: to_form(params, as: :job, errors: errors)
 
-  defp header_rows(%{"headers" => headers}, _current) when is_map(headers) do
-    headers
-    |> Enum.sort_by(fn {i, _} -> String.to_integer(i) end)
-    |> Enum.map(fn {_, row} -> %{key: row["key"] || "", value: row["value"] || ""} end)
-  end
-
-  defp header_rows(_params, current), do: current
-
   # Turns form params into what `Webhooks.enqueue/1` takes, the same call the
   # API makes, so both share one rule set. Problems that only exist in the
   # form (a half-typed number or date) come back as errors for the form.
   defp webhook_attrs(params, rows) do
-    headers =
-      for %{key: key, value: value} <- rows, String.trim(key) != "", into: %{} do
-        {String.trim(key), value}
-      end
-
-    attrs = %{
-      "url" => params["url"],
-      "method" => params["method"],
-      "headers" => headers,
-      "body" => decode_body(params["body"]),
-      "queue" => blank_to_nil(params["queue_name"]),
-      "max_attempts" => parse_int(params["max_attempts"])
-    }
+    attrs =
+      params
+      |> WebhookForm.request_attrs(rows)
+      |> Map.merge(%{
+        "queue" => blank_to_nil(params["queue_name"]),
+        "max_attempts" => parse_int(params["max_attempts"])
+      })
 
     case schedule_attrs(params) do
       {:ok, schedule} -> {Map.merge(attrs, schedule), []}
@@ -266,19 +252,6 @@ defmodule DistributedTaskQueueWeb.JobsLive do
 
   defp schedule_attrs(_params), do: {:ok, %{}}
 
-  # JSON objects and arrays are sent as JSON; anything else goes as typed.
-  defp decode_body(nil), do: nil
-
-  defp decode_body(text) do
-    trimmed = String.trim(text)
-
-    case Jason.decode(trimmed) do
-      _ when trimmed == "" -> nil
-      {:ok, decoded} when is_map(decoded) or is_list(decoded) -> decoded
-      _ -> text
-    end
-  end
-
   defp blank_to_nil(value) when value in [nil, ""], do: nil
   defp blank_to_nil(value), do: value
 
@@ -291,32 +264,15 @@ defmodule DistributedTaskQueueWeb.JobsLive do
     end
   end
 
-  @request_fields %{
-    "url" => :url,
-    "method" => :method,
-    "headers" => :headers,
-    "body" => :body,
-    "timeout_ms" => :timeout_ms
-  }
-
-  # `Webhooks.enqueue/1` reports request problems under :payload, either as
-  # "field: message" or as a plain sentence about the target (shown by the URL).
+  # `Webhooks.enqueue/1` reports request problems under :payload.
   defp changeset_errors(changeset) do
     for {field, error} <- changeset.errors do
       message = CoreComponents.translate_error(error)
 
-      case {field, Regex.run(~r/\A(\w+): (.*)\z/s, message)} do
-        {:payload, [_, name, rest]} when is_map_key(@request_fields, name) ->
-          {Map.fetch!(@request_fields, name), {rest, []}}
-
-        {:payload, _} ->
-          {:url, {message, []}}
-
-        {:scheduled_at, _} ->
-          {:when, {message, []}}
-
-        _ ->
-          {field, {message, []}}
+      case field do
+        :payload -> WebhookForm.payload_error(message)
+        :scheduled_at -> {:when, {message, []}}
+        _ -> {field, {message, []}}
       end
     end
   end

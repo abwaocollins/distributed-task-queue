@@ -390,7 +390,7 @@ defmodule DistributedTaskQueueWeb.ConsoleLiveTest do
       {:ok, view, _html} = live(conn, ~p"/cron/new")
 
       view
-      |> form("#cron-form", cron: %{schedule_type: "interval"})
+      |> form("#cron-form", cron: %{kind: "worker", schedule_type: "interval"})
       |> render_change()
 
       view
@@ -416,6 +416,7 @@ defmodule DistributedTaskQueueWeb.ConsoleLiveTest do
     test "shows cron expression and timezone errors inline", %{conn: conn} do
       insert(:queue, name: "emails")
       {:ok, view, _html} = live(conn, ~p"/cron/new")
+      view |> form("#cron-form", cron: %{kind: "worker"}) |> render_change()
 
       html =
         view
@@ -458,6 +459,143 @@ defmodule DistributedTaskQueueWeb.ConsoleLiveTest do
       {:ok, _view, html} = live(conn, ~p"/cron")
       assert html =~ "orphaned targets queue ghost, which does not exist"
       assert html =~ "Queue missing"
+    end
+  end
+
+  describe "webhook crons" do
+    alias DistributedTaskQueue.Webhooks
+    alias DistributedTaskQueue.Webhooks.Request
+    alias DistributedTaskQueue.Workers.Webhook, as: WebhookWorker
+
+    defp webhook_cron(name, webhook) do
+      attrs = Webhooks.cron_attrs(%{"webhook" => webhook})
+
+      {:ok, cron} =
+        DistributedTaskQueue.create_cron_job(
+          Map.merge(attrs, %{"name" => name, "queue_name" => "webhooks", "interval_seconds" => 60})
+        )
+
+      cron
+    end
+
+    setup do
+      insert(:queue, name: "webhooks")
+      :ok
+    end
+
+    test "creating a webhook cron from the form", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/cron/new")
+      view |> element("button", "Add a header") |> render_click()
+
+      view
+      |> form("#cron-form",
+        cron: %{
+          name: "nightly-ping",
+          schedule_type: "cron",
+          cron_expression: "0 2 * * *",
+          timezone: "Africa/Nairobi",
+          webhook: %{
+            url: "http://127.0.0.1:9/hook",
+            method: "PUT",
+            body: ~s({"order": 42}),
+            headers: %{"0" => %{key: "X-Api-Key", value: "abc"}}
+          }
+        }
+      )
+      |> render_submit()
+
+      cron = Repo.get_by!(CronJob, name: "nightly-ping")
+      assert cron.worker_module == WebhookWorker.module_name()
+      assert cron.queue_name == "webhooks"
+      assert cron.cron_expression == "0 2 * * *"
+      assert cron.payload["url"] == "http://127.0.0.1:9/hook"
+      assert cron.payload["method"] == "PUT"
+      assert cron.payload["headers"]["x-api-key"] == "abc"
+      assert cron.payload["body"] == ~s({"order":42})
+      assert render(view) =~ "Cron job nightly-ping saved"
+    end
+
+    test "a bad URL is reported inline and nothing is saved", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/cron/new")
+
+      html =
+        view
+        |> form("#cron-form",
+          cron: %{
+            name: "bad-url",
+            schedule_type: "cron",
+            cron_expression: "* * * * *",
+            webhook: %{url: "ftp://example.com/x"}
+          }
+        )
+        |> render_submit()
+
+      assert html =~ "must be an http or https URL"
+      refute Repo.get_by(CronJob, name: "bad-url")
+    end
+
+    test "the cron list and overview show the plain-English schedule", %{conn: conn} do
+      queue = insert(:queue)
+      insert(:cron_job, name: "morning", queue_name: queue.name, interval_seconds: nil, cron_expression: "0 9 * * 1", timezone: "Africa/Nairobi")
+      insert(:cron_job, name: "frequent", queue_name: queue.name, interval_seconds: 30)
+
+      {:ok, _view, html} = live(conn, ~p"/cron")
+      assert html =~ "Every Monday at 09:00 (Africa/Nairobi)"
+      assert html =~ "Every 30 seconds"
+      # The raw expression stays available for developers.
+      assert html =~ ~s(title="0 9 * * 1")
+
+      {:ok, _view, html} = live(conn, ~p"/")
+      assert html =~ "Every Monday at 09:00 (Africa/Nairobi)"
+      assert html =~ "Every 30 seconds"
+    end
+
+    test "editing a webhook cron without touching a redacted header keeps the secret",
+         %{conn: conn} do
+      cron =
+        webhook_cron("secured", %{
+          "url" => "http://127.0.0.1:9/hook",
+          "headers" => %{"authorization" => "Bearer s3cret", "x-note" => "hello"},
+          "timeout_ms" => 7000
+        })
+
+      stored = cron.payload["headers"]
+
+      {:ok, view, html} = live(conn, ~p"/cron/#{cron.id}/edit")
+      refute html =~ "s3cret"
+      assert html =~ Request.masked()
+      assert html =~ "hello"
+
+      view |> form("#cron-form", cron: %{max_attempts: 4}) |> render_submit()
+
+      reloaded = Repo.reload!(cron)
+      assert reloaded.max_attempts == 4
+      assert reloaded.payload["headers"] == stored
+      assert reloaded.payload["headers"]["authorization"] == "Bearer s3cret"
+      assert reloaded.payload["timeout_ms"] == 7000
+    end
+
+    test "overwriting a redacted header replaces the secret", %{conn: conn} do
+      cron =
+        webhook_cron("rotate", %{
+          "url" => "http://127.0.0.1:9/hook",
+          "headers" => %{"authorization" => "Bearer old"}
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/cron/#{cron.id}/edit")
+
+      view
+      |> form("#cron-form", cron: %{webhook: %{headers: %{"0" => %{key: "authorization", value: "Bearer new"}}}})
+      |> render_submit()
+
+      assert Repo.reload!(cron).payload["headers"]["authorization"] == "Bearer new"
+    end
+
+    test "an existing worker cron opens as a worker form", %{conn: conn} do
+      cron = insert(:cron_job, name: "legacy")
+      {:ok, view, _html} = live(conn, ~p"/cron/#{cron.id}/edit")
+      assert has_element?(view, "input[name='cron[worker_module]']")
+      refute has_element?(view, "input[name='cron[webhook][url]']")
     end
   end
 

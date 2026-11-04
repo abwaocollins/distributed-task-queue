@@ -41,7 +41,7 @@ defmodule DistributedTaskQueueWeb.WebhookFields do
       <.input field={@form[:method]} type="select" label="Method" options={methods()} />
 
       <div>
-        <.label for="job_headers_add">Headers</.label>
+        <.label for={"#{@form.id}_headers_add"}>Headers</.label>
         <p class="text-xs text-zinc-500 dark:text-zinc-400">
           Optional extra details sent with the request, such as an API key.
         </p>
@@ -52,8 +52,8 @@ defmodule DistributedTaskQueueWeb.WebhookFields do
         >
           <div class="flex-1">
             <.input
-              id={"job_headers_#{i}_key"}
-              name={"job[headers][#{i}][key]"}
+              id={"#{@form.id}_headers_#{i}_key"}
+              name={"#{@form.name}[headers][#{i}][key]"}
               value={row.key}
               placeholder="Name, e.g. X-Api-Key"
               aria-label="Header name"
@@ -62,8 +62,8 @@ defmodule DistributedTaskQueueWeb.WebhookFields do
           </div>
           <div class="flex-1">
             <.input
-              id={"job_headers_#{i}_value"}
-              name={"job[headers][#{i}][value]"}
+              id={"#{@form.id}_headers_#{i}_value"}
+              name={"#{@form.name}[headers][#{i}][value]"}
               value={row.value}
               placeholder="Value"
               aria-label="Header value"
@@ -75,7 +75,7 @@ defmodule DistributedTaskQueueWeb.WebhookFields do
           </.btn>
         </div>
         <.error :for={msg <- field_errors(@form, :headers)}>{msg}</.error>
-        <.btn size={:sm} id="job_headers_add" phx-click="add_header" class="mt-2">
+        <.btn size={:sm} id={"#{@form.id}_headers_add"} phx-click="add_header" class="mt-2">
           Add a header
         </.btn>
       </div>
