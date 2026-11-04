@@ -43,9 +43,10 @@ defmodule DistributedTaskQueueWeb.CronLive do
   defp apply_action(%{assigns: %{live_action: :new}} = socket, _params) do
     queue = if "webhooks" in Dashboard.queue_names(), do: "webhooks"
 
+    # The form opens on "Call a URL", and webhooks default to 5 attempts.
     cron = %CronJob{
       payload: %{},
-      max_attempts: 3,
+      max_attempts: 5,
       overlap: false,
       enabled: true,
       queue_name: queue

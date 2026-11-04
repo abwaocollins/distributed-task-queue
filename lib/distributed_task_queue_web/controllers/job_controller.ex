@@ -2,7 +2,6 @@ defmodule DistributedTaskQueueWeb.JobController do
   use DistributedTaskQueueWeb, :controller
 
   alias DistributedTaskQueue.{Job, Webhooks}
-  alias DistributedTaskQueue.Workers.Webhook
   alias DistributedTaskQueueWeb.ChangesetErrors
 
   def index(conn, params) do
@@ -72,7 +71,9 @@ defmodule DistributedTaskQueueWeb.JobController do
 
   @doc false
   def job_json(%{worker_module: module} = job) do
-    if module == Webhook.module_name() do
+    # Resolve rather than string-compare, so an "Elixir."-prefixed spelling of
+    # the webhook worker is redacted too.
+    if Webhooks.webhook_worker?(module) do
       job
       |> base_json()
       |> Map.put(:payload, Webhooks.redact_payload(job))

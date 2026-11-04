@@ -88,25 +88,24 @@ defmodule DistributedTaskQueue.Webhooks.TargetTest do
 end
 
 defmodule DistributedTaskQueue.Webhooks.TargetBootTest do
-  # Not async: it removes global state every endpoint call reads.
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias DistributedTaskQueue.Webhooks.Target
 
-  test "demo_receiver_url/1 does not need the endpoint to be running" do
-    # The endpoint's persistent term is what Endpoint.url/0 reads and what is
-    # missing before the endpoint starts.
-    key = {Phoenix.Endpoint, DistributedTaskQueueWeb.Endpoint}
-    saved = :persistent_term.get(key)
-    :persistent_term.erase(key)
+  # demo_receiver_url/1 is built from endpoint config, not Endpoint.url/0, so it
+  # works for processes that start before the endpoint. These pin the builder to
+  # what Phoenix would produce for each environment's config.
+  test "dev/test config: http on the listening port" do
+    assert Target.base_url(url: [host: "localhost"], http: [port: 4000]) ==
+             "http://localhost:4000"
+  end
 
-    try do
-      assert_raise RuntimeError, fn -> DistributedTaskQueueWeb.Endpoint.url() end
+  test "prod config: the public https URL, default port omitted" do
+    config = [url: [host: "dtq.fly.dev", port: 443, scheme: "https"], http: [port: 8080]]
+    assert Target.base_url(config) == "https://dtq.fly.dev"
+  end
 
-      assert Target.demo_receiver_url("email") =~
-               ~r{\Ahttp://localhost:\d+/demo/receivers/email\z}
-    after
-      :persistent_term.put(key, saved)
-    end
+  test "a string port from the environment is accepted" do
+    assert Target.base_url(url: [host: "h"], http: [port: "4001"]) == "http://h:4001"
   end
 end

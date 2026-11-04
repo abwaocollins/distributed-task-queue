@@ -80,8 +80,12 @@ defmodule DistributedTaskQueue.Webhooks.Target do
   # Derived the way Phoenix derives Endpoint.url/0: the :url config wins,
   # falling back to the scheme and port the endpoint listens on. URI drops a
   # default port, as Phoenix does.
-  defp endpoint_url do
-    config = Application.get_env(:distributed_task_queue, Endpoint, [])
+  defp endpoint_url, do: base_url(Application.get_env(:distributed_task_queue, Endpoint, []))
+
+  # Public only so tests can check it against each environment's endpoint
+  # config without tearing down the running endpoint.
+  @doc false
+  def base_url(config) do
     url = config[:url] || []
     {scheme, port} = listening(config)
 

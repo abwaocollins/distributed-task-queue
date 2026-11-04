@@ -108,6 +108,17 @@ defmodule DistributedTaskQueueWeb.WebhookControllerTest do
                "Bearer s3cret"
     end
 
+    test "an Elixir.-prefixed spelling of the webhook worker is redacted too", %{conn: conn} do
+      job =
+        insert(:job,
+          worker_module: "Elixir.DistributedTaskQueue.Workers.Webhook",
+          payload: %{"url" => @url, "headers" => %{"authorization" => "Bearer s3cret"}}
+        )
+
+      assert %{"data" => data} = conn |> get(~p"/api/jobs/#{job.id}") |> json_response(200)
+      assert data["payload"]["headers"] == %{"authorization" => "••••"}
+    end
+
     test "non-webhook jobs have no deliveries", %{conn: conn} do
       job = insert(:job)
       assert %{"data" => data} = conn |> get(~p"/api/jobs/#{job.id}") |> json_response(200)

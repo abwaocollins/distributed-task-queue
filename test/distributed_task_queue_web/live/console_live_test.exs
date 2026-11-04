@@ -599,6 +599,8 @@ defmodule DistributedTaskQueueWeb.ConsoleLiveTest do
       assert cron.payload["method"] == "PUT"
       assert cron.payload["headers"]["x-api-key"] == "abc"
       assert cron.payload["body"] == ~s({"order":42})
+      # Webhooks default to 5 attempts, from the console as from the API.
+      assert cron.max_attempts == 5
       assert render(view) =~ "Cron job nightly-ping saved"
     end
 
