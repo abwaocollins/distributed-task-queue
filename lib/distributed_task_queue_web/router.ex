@@ -15,6 +15,11 @@ defmodule DistributedTaskQueueWeb.Router do
     plug DistributedTaskQueueWeb.Plugs.ApiAuth
   end
 
+  # No auth: the service calls these like an external system would.
+  pipeline :demo_receiver do
+    plug :accepts, ["json"]
+  end
+
   pipeline :console_auth do
     plug DistributedTaskQueueWeb.Plugs.AdminAuth, scope: :console
   end
@@ -63,6 +68,12 @@ defmodule DistributedTaskQueueWeb.Router do
     post "/cron_jobs/:id/enable", CronJobController, :enable
     post "/cron_jobs/:id/disable", CronJobController, :disable
     resources "/cron_jobs", CronJobController, except: [:new, :edit]
+  end
+
+  scope "/demo", DistributedTaskQueueWeb do
+    pipe_through :demo_receiver
+
+    match :*, "/receivers/:name", DemoReceiverController, :receive
   end
 
   import Phoenix.LiveDashboard.Router

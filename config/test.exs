@@ -43,3 +43,6 @@ config :phoenix_live_view,
 
 # Local webhook receivers (and the demo ones) live on localhost.
 config :distributed_task_queue, :webhooks, allow_private_targets: true
+
+# The demo receivers sleep for a random time to look like real services.
+config :distributed_task_queue, :demo_receiver_delay_ms, 0..0
