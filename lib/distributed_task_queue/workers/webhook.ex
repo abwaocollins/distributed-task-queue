@@ -20,6 +20,9 @@ defmodule DistributedTaskQueue.Workers.Webhook do
   # dropped, so a job can't impersonate another job or forge a signature.
   @service_headers ~w(user-agent x-dtq-job-id x-dtq-attempt x-dtq-signature)
 
+  # Matches the cap Webhooks.record_delivery/2 applies to response_body.
+  @max_body_bytes 2048
+
   @doc "The `worker_module` string stored on webhook jobs."
   @spec module_name() :: String.t()
   def module_name, do: inspect(__MODULE__)
@@ -52,6 +55,9 @@ defmodule DistributedTaskQueue.Workers.Webhook do
   defp check_target(url) do
     case Target.check(url) do
       :ok -> :ok
+      # DNS failures are often temporary (a resolver blip, a record not yet
+      # propagated), so they are worth retrying. Nothing was sent either way.
+      {:error, :unresolvable} -> {:error, Target.reason_text(:unresolvable)}
       {:error, reason} -> {:discard, Target.reason_text(reason)}
     end
   end
@@ -63,26 +69,74 @@ defmodule DistributedTaskQueue.Workers.Webhook do
 
     t0 = System.monotonic_time(:millisecond)
 
-    result =
-      request["method"]
-      |> Finch.build(request["url"], headers, body)
-      |> Finch.request(DistributedTaskQueue.Finch,
-        receive_timeout: timeout,
-        request_timeout: timeout
-      )
+    finch_request = Finch.build(request["method"], request["url"], headers, body)
+    result = send_within(finch_request, timeout)
 
     duration = System.monotonic_time(:millisecond) - t0
     base = %{method: request["method"], url: request["url"], duration_ms: duration}
 
     case result do
-      {:ok, %Finch.Response{status: status, body: resp_body}} ->
+      {:ok, status, resp_body} ->
         record(job, Map.merge(base, %{status_code: status, response_body: resp_body}))
         outcome(status)
 
-      {:error, exception} ->
-        message = transport_message(exception, timeout)
+      {:error, message} ->
         record(job, Map.put(base, :error, message))
         {:error, message}
+    end
+  end
+
+  # Finch's own timeouts cover waiting for the response but not the TCP
+  # connect, which uses the pool's default. Running the request in a task
+  # bounds the whole call, so a blackholed host fails within timeout_ms too.
+  defp send_within(finch_request, timeout) do
+    task =
+      Task.async(fn ->
+        try do
+          stream(finch_request, timeout)
+        rescue
+          e -> {:error, "Could not reach the receiver (#{Exception.message(e)})."}
+        catch
+          :exit, reason -> {:error, "Could not reach the receiver (#{inspect(reason)})."}
+        end
+      end)
+
+    case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
+      {:ok, result} -> result
+      _ -> {:error, timeout_message(timeout)}
+    end
+  end
+
+  # Streams rather than buffers: only the first @max_body_bytes are kept for
+  # the delivery record, so a receiver sending a huge body can't make the
+  # worker hold all of it in memory. Halting closes the connection early.
+  defp stream(finch_request, timeout) do
+    acc = %{status: nil, body: [], size: 0}
+
+    collect = fn
+      {:status, status}, acc ->
+        {:cont, %{acc | status: status}}
+
+      {:data, data}, acc ->
+        take = min(byte_size(data), @max_body_bytes - acc.size)
+        acc = %{acc | body: [acc.body, binary_part(data, 0, take)], size: acc.size + take}
+        if acc.size >= @max_body_bytes, do: {:halt, acc}, else: {:cont, acc}
+
+      _headers_or_trailers, acc ->
+        {:cont, acc}
+    end
+
+    opts = [receive_timeout: timeout, request_timeout: timeout]
+
+    case Finch.stream_while(finch_request, DistributedTaskQueue.Finch, acc, collect, opts) do
+      {:ok, %{status: status} = acc} when is_integer(status) ->
+        {:ok, status, IO.iodata_to_binary(acc.body)}
+
+      {:ok, _no_status} ->
+        {:error, "Could not reach the receiver (no response status)."}
+
+      {:error, exception, _acc} ->
+        {:error, transport_message(exception, timeout)}
     end
   end
 
@@ -137,8 +191,13 @@ defmodule DistributedTaskQueue.Workers.Webhook do
        "The receiver answered with a redirect (#{describe(status)}), but redirects are not " <>
          "followed. Point the webhook at the final URL."}
 
-  defp outcome(status),
+  defp outcome(status) when status in 400..499,
     do: {:discard, "The receiver rejected it (#{describe(status)}) — retrying would not help."}
+
+  defp outcome(status),
+    do:
+      {:discard,
+       "The receiver sent an unexpected response (#{describe(status)}) — retrying would not help."}
 
   defp describe(status) do
     "#{status} #{Plug.Conn.Status.reason_phrase(status)}"
@@ -147,10 +206,12 @@ defmodule DistributedTaskQueue.Workers.Webhook do
   end
 
   defp transport_message(%Mint.TransportError{reason: :timeout}, timeout),
-    do: "No response within #{format_ms(timeout)}."
+    do: timeout_message(timeout)
 
   defp transport_message(exception, _timeout),
     do: "Could not reach the receiver (#{Exception.message(exception)})."
+
+  defp timeout_message(timeout), do: "No response within #{format_ms(timeout)}."
 
   defp format_ms(ms) when rem(ms, 1000) == 0, do: "#{div(ms, 1000)}s"
   defp format_ms(ms), do: "#{ms}ms"

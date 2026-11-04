@@ -110,7 +110,9 @@ defmodule DistributedTaskQueue.Workers.WebhookTest do
     {:ok, port} = :inet.port(socket)
     :ok = :gen_tcp.close(socket)
 
-    job = webhook_job(%{"url" => "http://127.0.0.1:#{port}/"})
+    # Windows retries a refused connect for about 2 s before giving up, so
+    # leave room for that inside timeout_ms.
+    job = webhook_job(%{"url" => "http://127.0.0.1:#{port}/", "timeout_ms" => 5_000})
 
     job = run(job)
     assert job.status == "retryable"
@@ -118,6 +120,51 @@ defmodule DistributedTaskQueue.Workers.WebhookTest do
 
     assert [%{status_code: nil, error: error}] = Webhooks.list_deliveries(job.id)
     assert error =~ "refused"
+  end
+
+  test "an unresolvable host is retryable and sends nothing" do
+    job = webhook_job(%{"url" => "http://no-such-host.invalid/hook"})
+
+    job = run(job)
+    assert job.status == "retryable"
+    assert job.error_message =~ "couldn't find that address"
+    assert Webhooks.list_deliveries(job.id) == []
+  end
+
+  test "an unexpected status dead-letters without saying it was rejected" do
+    # Bandit refuses to send a status outside 1xx-5xx, so answer by hand.
+    {:ok, listen} = :gen_tcp.listen(0, ip: {127, 0, 0, 1}, active: false, reuseaddr: true)
+    {:ok, port} = :inet.port(listen)
+
+    spawn_link(fn ->
+      {:ok, socket} = :gen_tcp.accept(listen)
+      {:ok, _request} = :gen_tcp.recv(socket, 0)
+      :ok = :gen_tcp.send(socket, "HTTP/1.1 600 Odd
+content-length: 0
+
+")
+      :gen_tcp.close(socket)
+    end)
+
+    job = webhook_job(%{"url" => "http://127.0.0.1:#{port}/"})
+
+    job = run(job)
+    assert job.status == "discarded"
+    assert job.error_message =~ "unexpected response (600"
+    refute job.error_message =~ "rejected"
+  end
+
+  # 10.255.255.1 is normally unroutable, so the connect hangs; where the
+  # network refuses it outright instead, the job still fails fast.
+  test "a host that never accepts the connection fails within timeout_ms" do
+    job = webhook_job(%{"url" => "http://10.255.255.1/", "timeout_ms" => 300})
+
+    {elapsed_us, job} = :timer.tc(fn -> run(job) end)
+
+    assert elapsed_us < 1_000_000
+    assert job.status == "retryable"
+    assert [%{status_code: nil, error: error}] = Webhooks.list_deliveries(job.id)
+    assert error =~ "No response within 300ms" or error =~ "Could not reach"
   end
 
   test "a receiver that never answers times out" do
@@ -223,6 +270,8 @@ defmodule DistributedTaskQueue.Workers.WebhookTest do
     assert run(job).status == "completed"
 
     assert [delivery] = Webhooks.list_deliveries(job.id)
+    assert delivery.status_code == 200
     assert byte_size(delivery.response_body) <= 2048
+    assert String.starts_with?(delivery.response_body, "xxxx")
   end
 end
