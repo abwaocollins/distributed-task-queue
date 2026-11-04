@@ -5,7 +5,7 @@
 Underneath, it is a background job queue that keeps running when a machine dies. Jobs are enqueued into PostgreSQL, claimed by worker processes across any number of BEAM nodes, retried with exponential backoff, and routed to a dead-letter queue once they exhaust their attempts. Scheduling is built in — cron expressions with real timezone and DST handling, or fixed intervals. A live web console shows what every queue is doing, surfaces failures, and lets you manage queues, jobs, the dead-letter queue and cron schedules without touching the API.
 
 [![CI](https://github.com/abwaocollins/distributed-task-queue/actions/workflows/ci.yml/badge.svg)](https://github.com/abwaocollins/distributed-task-queue/actions/workflows/ci.yml)
-![Elixir](https://img.shields.io/badge/elixir-~%3E%201.15-purple)
+![Elixir](https://img.shields.io/badge/elixir-1.18%20%E2%80%93%201.20-purple)
 ![PostgreSQL](https://img.shields.io/badge/postgresql-14%2B-blue)
 
 <!-- DEMO SLOT — live demo link and the kill-a-node GIF go here, above the fold. -->
@@ -454,7 +454,7 @@ mix dialyzer          # type checking
 
 ## Running locally
 
-Requires Elixir ~> 1.15, OTP 25+, and PostgreSQL 14+.
+Requires Elixir 1.18+ with OTP 25+ (CI tests Elixir 1.18 / OTP 25 and 1.20 / OTP 29), and PostgreSQL 14+.
 
 ```bash
 mix setup       # deps, database create + migrate, assets

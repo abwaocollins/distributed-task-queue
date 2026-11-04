@@ -283,21 +283,10 @@ defmodule DistributedTaskQueue.Webhooks do
   # backing off so a multi-byte codepoint is never split.
   defp scrub(value, limit) do
     value
-    |> replace_invalid()
+    |> String.replace_invalid()
     |> String.replace(<<0>>, "")
     |> cut(limit)
   end
-
-  # String.replace_invalid/1 does this, but it needs Elixir 1.16 and the
-  # project still supports 1.15. Each byte that does not start a valid
-  # codepoint becomes U+FFFD.
-  defp replace_invalid(s), do: replace_invalid(s, [])
-
-  defp replace_invalid(<<c::utf8, rest::binary>>, acc),
-    do: replace_invalid(rest, [acc, <<c::utf8>>])
-
-  defp replace_invalid(<<_byte, rest::binary>>, acc), do: replace_invalid(rest, [acc, "�"])
-  defp replace_invalid(<<>>, acc), do: IO.iodata_to_binary(acc)
 
   defp cut(s, :infinity), do: s
 
