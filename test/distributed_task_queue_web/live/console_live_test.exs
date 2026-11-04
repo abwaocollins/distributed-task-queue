@@ -3,7 +3,7 @@ defmodule DistributedTaskQueueWeb.ConsoleLiveTest do
 
   import Phoenix.LiveViewTest
 
-  alias DistributedTaskQueue.{CronJob, Job, Queue, QueueCache, Repo, WorkerSupervisor}
+  alias DistributedTaskQueue.{CronJob, Job, Queue, QueueCache, Repo, Webhooks, WorkerSupervisor}
 
   defp cleanup_queue(name) do
     on_exit(fn ->
@@ -241,6 +241,80 @@ defmodule DistributedTaskQueueWeb.ConsoleLiveTest do
     test "detail page for a missing job says so", %{conn: conn} do
       {:ok, _view, html} = live(conn, ~p"/jobs/999999")
       assert html =~ "does not exist or was deleted"
+    end
+  end
+
+  describe "job detail" do
+    defp webhook_job(attrs \\ []) do
+      queue = insert(:queue)
+      cleanup_queue(queue.name)
+      DistributedTaskQueue.pause_queue(queue.name)
+
+      insert(
+        :job,
+        Keyword.merge(
+          [
+            queue_name: queue.name,
+            worker_module: DistributedTaskQueue.Workers.Webhook.module_name(),
+            payload: %{
+              "url" => "https://example.com/hook",
+              "method" => "POST",
+              "headers" => %{"x-api-key" => "s3cr3t-value", "accept" => "text/plain"},
+              "body" => ~s({"order":42})
+            }
+          ],
+          attrs
+        )
+      )
+    end
+
+    test "shows each delivery attempt", %{conn: conn} do
+      job = webhook_job(status: "retryable")
+
+      {:ok, _} =
+        Webhooks.record_delivery(job, %{
+          status_code: 503,
+          duration_ms: 120,
+          response_body: "<b>down</b>"
+        })
+
+      {:ok, _} = Webhooks.record_delivery(job, %{error: "connection refused", duration_ms: 3})
+
+      {:ok, view, html} = live(conn, ~p"/jobs/#{job.id}")
+      assert has_element?(view, "#delivery-1", "503 Service Unavailable")
+      assert has_element?(view, "#delivery-1", "120 ms")
+      assert has_element?(view, "#delivery-2", "connection refused")
+      # The response is shown as text, never as markup.
+      assert html =~ "&lt;b&gt;down&lt;/b&gt;"
+      refute html =~ "<b>down</b>"
+      assert html =~ "https://example.com/hook"
+    end
+
+    test "never shows a credential header value", %{conn: conn} do
+      job = webhook_job()
+      {:ok, _view, html} = live(conn, ~p"/jobs/#{job.id}")
+      refute html =~ "s3cr3t-value"
+      assert html =~ "••••"
+      assert html =~ "text/plain"
+    end
+
+    test "dead-lettered webhook shows the plain reason", %{conn: conn} do
+      job =
+        webhook_job(
+          status: "discarded",
+          dead_letter: true,
+          error_message: "The server answered 500 on every attempt"
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/jobs/#{job.id}")
+      assert has_element?(view, "#job-error", "The server answered 500 on every attempt")
+    end
+
+    test "non-webhook jobs keep the raw payload panel", %{conn: conn} do
+      job = insert(:job)
+      {:ok, view, _html} = live(conn, ~p"/jobs/#{job.id}")
+      assert has_element?(view, "#job-payload")
+      refute has_element?(view, "#deliveries")
     end
   end
 

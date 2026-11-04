@@ -2,7 +2,9 @@ defmodule DistributedTaskQueueWeb.JobLive do
   @moduledoc "One job: status, full error, payload, timeline, and requeue/delete."
   use DistributedTaskQueueWeb, :live_view
 
-  alias DistributedTaskQueue.{Dashboard, Events}
+  alias DistributedTaskQueue.{Dashboard, Events, Webhooks}
+  alias DistributedTaskQueue.Webhooks.Request
+  alias DistributedTaskQueue.Workers.Webhook
   alias DistributedTaskQueueWeb.LiveRefresh
 
   @impl true
@@ -18,7 +20,9 @@ defmodule DistributedTaskQueueWeb.JobLive do
 
   def refresh(%{assigns: %{job_id: id}} = socket) do
     job = Dashboard.get_job(id)
-    assign(socket, job: job, page_title: "Job ##{id}")
+    # Loaded here so the attempts table follows retries as they happen.
+    deliveries = if webhook?(job), do: Webhooks.list_deliveries(id), else: []
+    assign(socket, job: job, deliveries: deliveries, page_title: "Job ##{id}")
   end
 
   def refresh(socket), do: socket
@@ -157,7 +161,34 @@ defmodule DistributedTaskQueueWeb.JobLive do
           </.surface>
         </.panel>
 
-        <.panel title="Payload" class="min-w-0">
+        <.panel :if={webhook?(@job)} title="Request" class="min-w-0">
+          <.surface>
+            <dl id="job-request" class={[tbody_class(), "text-sm"]}>
+              <.detail label="Method">
+                <span class="font-mono">{request_method(@job.payload)}</span>
+              </.detail>
+              <.detail label="URL">
+                <span class="break-all font-mono text-xs">{@job.payload["url"]}</span>
+              </.detail>
+              <div
+                :for={{name, value} <- request_headers(@job.payload)}
+                class="flex justify-between gap-4 px-4 py-2 font-mono text-xs"
+              >
+                <dt class="text-zinc-500 dark:text-zinc-400">{name}</dt>
+                <dd class="break-all text-right">{value}</dd>
+              </div>
+            </dl>
+            <pre
+              :if={request_body(@job.payload)}
+              id="job-request-body"
+              class="overflow-x-auto border-t border-zinc-100 p-4 font-mono text-xs text-zinc-800 dark:border-zinc-800 dark:text-zinc-200"
+            >{request_body(@job.payload)}</pre>
+          </.surface>
+        </.panel>
+
+        <%!-- A webhook payload can hold credential headers, so it is only ever
+             shown through the redacted Request panel above. --%>
+        <.panel :if={!webhook?(@job)} title="Payload" class="min-w-0">
           <.surface>
             <pre
               id="job-payload"
@@ -166,6 +197,37 @@ defmodule DistributedTaskQueueWeb.JobLive do
           </.surface>
         </.panel>
       </div>
+
+      <.panel :if={webhook?(@job)} title="Delivery attempts">
+        <.empty_state :if={@deliveries == []}>No delivery attempts yet.</.empty_state>
+        <.surface :if={@deliveries != []}>
+          <table id="deliveries" class="w-full text-left text-sm">
+            <thead class={thead_class()}>
+              <tr>
+                <th class={th_class()}>#</th>
+                <th class={th_class()}>When</th>
+                <th class={th_class()}>Result</th>
+                <th class={th_class()}>Took</th>
+                <th class={th_class()}>Response</th>
+              </tr>
+            </thead>
+            <tbody class={tbody_class()}>
+              <tr :for={d <- @deliveries} id={"delivery-#{d.number}"} class="align-top">
+                <td class={[td_class(), "font-mono"]}>{d.number}</td>
+                <td class={td_class()}><.rel_time at={d.inserted_at} now={@now} /></td>
+                <td class={td_class()}>{result_text(d)}</td>
+                <td class={[td_class(), "font-mono"]}>{d.duration_ms && "#{d.duration_ms} ms"}</td>
+                <td class={td_class()}>
+                  <details :if={d.response_body not in [nil, ""]}>
+                    <summary class="cursor-pointer text-zinc-500 dark:text-zinc-400">Show</summary>
+                    <pre class="mt-2 max-w-xl overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs">{d.response_body}</pre>
+                  </details>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </.surface>
+      </.panel>
     </div>
     """
   end
@@ -180,6 +242,50 @@ defmodule DistributedTaskQueueWeb.JobLive do
       <dd class="text-right text-zinc-900 dark:text-zinc-100">{render_slot(@inner_block)}</dd>
     </div>
     """
+  end
+
+  defp webhook?(%{worker_module: module}), do: module == Webhook.module_name()
+  defp webhook?(_), do: false
+
+  defp request_method(payload), do: String.upcase(to_string(payload["method"] || "POST"))
+
+  # Credential values are masked here, never in the stored payload.
+  defp request_headers(payload) do
+    case payload["headers"] do
+      headers when is_map(headers) -> headers |> Request.redact_headers() |> Enum.sort()
+      _ -> []
+    end
+  end
+
+  defp request_body(payload) do
+    case payload["body"] do
+      body when body in [nil, ""] ->
+        nil
+
+      body when is_binary(body) ->
+        case Jason.decode(body) do
+          {:ok, decoded} when is_map(decoded) or is_list(decoded) -> pretty_json(decoded)
+          _ -> body
+        end
+
+      other ->
+        pretty_json(other)
+    end
+  end
+
+  defp result_text(%{status_code: code}) when is_integer(code) do
+    case reason_phrase(code) do
+      nil -> to_string(code)
+      phrase -> "#{code} #{phrase}"
+    end
+  end
+
+  defp result_text(%{error: error}), do: error || "No result recorded"
+
+  defp reason_phrase(code) do
+    Plug.Conn.Status.reason_phrase(code)
+  rescue
+    _ -> nil
   end
 
   defp error_title(%{dead_letter: true}), do: "Failed on every attempt. This is the last error."
