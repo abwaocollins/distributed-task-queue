@@ -128,27 +128,21 @@ defmodule DistributedTaskQueue.Webhooks do
     end
   end
 
-  defp schedule(attrs) do
-    delay = Map.get(attrs, "delay_seconds")
-    run_at = Map.get(attrs, "run_at")
+  defp schedule(attrs), do: schedule(Map.get(attrs, "delay_seconds"), Map.get(attrs, "run_at"))
 
-    cond do
-      not is_nil(delay) and not is_nil(run_at) ->
-        {:error, :scheduled_at, ["give either delay_seconds or run_at, not both"]}
+  defp schedule(nil, nil), do: {:ok, nil}
+  defp schedule(nil, run_at), do: parse_run_at(run_at)
 
-      is_nil(delay) and is_nil(run_at) ->
-        {:ok, nil}
+  defp schedule(delay, nil) when is_integer(delay) and delay >= 0 and delay <= @max_delay_seconds do
+    {:ok, DateTime.utc_now() |> DateTime.add(delay, :second) |> DateTime.truncate(:second)}
+  end
 
-      is_integer(delay) and delay >= 0 and delay <= @max_delay_seconds ->
-        {:ok, DateTime.utc_now() |> DateTime.add(delay, :second) |> DateTime.truncate(:second)}
+  defp schedule(_delay, nil) do
+    {:error, :scheduled_at, ["delay_seconds must be an integer from 0 to #{@max_delay_seconds}"]}
+  end
 
-      not is_nil(delay) ->
-        {:error, :scheduled_at,
-         ["delay_seconds must be an integer from 0 to #{@max_delay_seconds}"]}
-
-      true ->
-        parse_run_at(run_at)
-    end
+  defp schedule(_delay, _run_at) do
+    {:error, :scheduled_at, ["give either delay_seconds or run_at, not both"]}
   end
 
   defp parse_run_at(run_at) when is_binary(run_at) do

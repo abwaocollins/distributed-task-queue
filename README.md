@@ -1,8 +1,8 @@
 # Distributed Task Queue
 
-**Background job processing that keeps running when a machine dies.**
+**A job service any app can hand HTTP work to.** Tell it which URL to call and when (now, in ten minutes, or every morning at 9) and it makes sure the call happens, retrying through failures and setting aside whatever keeps failing. It works with any language, because all it needs is a URL.
 
-Jobs are enqueued into PostgreSQL, claimed by worker processes across any number of BEAM nodes, retried with exponential backoff, and routed to a dead-letter queue once they exhaust their attempts. Scheduling is built in — cron expressions with real timezone and DST handling, or fixed intervals. A live web console shows what every queue is doing, surfaces failures, and lets you manage queues, jobs, the dead-letter queue and cron schedules without touching the API.
+Underneath, it is a background job queue that keeps running when a machine dies. Jobs are enqueued into PostgreSQL, claimed by worker processes across any number of BEAM nodes, retried with exponential backoff, and routed to a dead-letter queue once they exhaust their attempts. Scheduling is built in — cron expressions with real timezone and DST handling, or fixed intervals. A live web console shows what every queue is doing, surfaces failures, and lets you manage queues, jobs, the dead-letter queue and cron schedules without touching the API.
 
 [![CI](https://github.com/abwaocollins/distributed-task-queue/actions/workflows/ci.yml/badge.svg)](https://github.com/abwaocollins/distributed-task-queue/actions/workflows/ci.yml)
 ![Elixir](https://img.shields.io/badge/elixir-~%3E%201.15-purple)
@@ -87,6 +87,7 @@ Every enqueue goes through `add_job/2`, which starts the queue's manager or wake
 | **Orphan rescue** | Jobs stranded in `started` by a dead node are retried, or dead-lettered on their last attempt |
 | **Live reconfiguration** | Concurrency changes, resumes and new cron jobs take effect immediately — no restart |
 | **Authentication** | Bearer API keys for `/api/*`; basic auth for the console and LiveDashboard |
+| **Webhook jobs** | Call any URL now, later or on a schedule; signed requests, per-attempt delivery history, SSRF protection |
 | **Future scheduling** | `scheduled_at` for one-off delayed jobs |
 | **Telemetry** | `[:dtq, :job, …]` and `[:dtq, :cron, …]` events, wired into LiveDashboard and the console |
 | **Web console** | Live overview, filterable job list, per-job detail, and create / edit / delete for queues, jobs and cron jobs |
@@ -185,12 +186,13 @@ curl -X POST localhost:4000/api/jobs \
 | `GET` | `/api/jobs` | List jobs (filterable) |
 | `GET` | `/api/jobs/:id` | Fetch one job |
 | `POST` | `/api/jobs` | Enqueue a job |
+| `POST` | `/api/webhooks` | Enqueue a webhook: an HTTP request to deliver now or later (see [Webhooks](#webhooks)) |
 | `DELETE` | `/api/jobs/:id` | Soft-delete a job |
 | `POST` | `/api/jobs/:id/requeue` | Requeue one dead-lettered job |
 | `POST` | `/api/jobs/requeue_dead_letter` | Requeue every dead-lettered job |
 | `GET` | `/api/cron_jobs` | List cron jobs |
 | `GET` | `/api/cron_jobs/:id` | Fetch one cron job |
-| `POST` | `/api/cron_jobs` | Create a cron job (first run computed from now) |
+| `POST` | `/api/cron_jobs` | Create a cron job (first run computed from now); takes a `webhook` object in place of `worker_module` + `payload` |
 | `PATCH` | `/api/cron_jobs/:id` | Update a cron job (`enabled`, `next_run_at`, `last_run_at` are ignored) |
 | `DELETE` | `/api/cron_jobs/:id` | Delete a cron job |
 | `POST` | `/api/cron_jobs/:id/enable` | Enable, restarting the schedule from now (no catch-up run) |
@@ -202,10 +204,134 @@ Responses use conventional status codes — `401` for a missing or wrong API key
 
 | Surface | Mechanism | Configured by |
 |---|---|---|
-| `/api/*` | `Authorization: Bearer <key>` | `DTQ_API_KEYS` (comma-separated) |
+| `/api/*` | `Authorization: Bearer <key>` | `DTQ_API_KEYS` (comma-separated), plus `DTQ_DEMO_API_KEY` if set |
 | Console and `/admin/dashboard` | HTTP basic auth | `DTQ_ADMIN_USERNAME`, `DTQ_ADMIN_PASSWORD` |
 
 Open in development and test. In production the API is **locked** when `DTQ_API_KEYS` is unset, and the app **refuses to boot** without admin credentials — unless `DTQ_PUBLIC_CONSOLE=true` is set deliberately, which opens the console (for a public demo) but keeps LiveDashboard closed. Basic auth is checked on the initial request *and* when the LiveView socket mounts, since the socket is a separate connection the plug never sees.
+
+Webhook deliveries add three more settings:
+
+| Variable | Effect |
+|---|---|
+| `DTQ_WEBHOOK_SECRET` | Signs every outgoing webhook ([how receivers verify it](#verifying-the-signature)). **Required in production**: the app refuses to boot without it, rather than send unsigned requests. Generate one with `mix phx.gen.secret`. |
+| `DTQ_WEBHOOK_TARGETS` | `demo` restricts webhooks to the built-in demo receivers (for a public deployment); anything else allows any public URL. |
+| `DTQ_DEMO_API_KEY` | An extra, deliberately published API key for a public demo. It is a real key, so set it only where that is intended; combined with `DTQ_WEBHOOK_TARGETS=demo` it can reach nothing but the demo receivers. |
+
+## Webhooks
+
+A webhook job is one HTTP request that the service delivers for you. It is an ordinary row in `jobs`, claimed and retried by the same machinery as any other job, so it inherits backoff, the dead-letter queue and orphan rescue. A built-in worker (`DistributedTaskQueue.Workers.Webhook`) makes the request and records every attempt.
+
+```bash
+curl -X POST localhost:4000/api/webhooks \
+  -H "authorization: Bearer $DTQ_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"url": "https://example.com/hooks/invoice-paid",
+       "method": "POST",
+       "headers": {"authorization": "Bearer their-token"},
+       "body": {"invoice": 4021},
+       "delay_seconds": 600,
+       "max_attempts": 5}'
+```
+
+That returns `201` with the job, whose id works with `GET /api/jobs/:id`; for webhook jobs the response includes the delivery attempts. Only `url` is required. The rest:
+
+| Field | Default | Notes |
+|---|---|---|
+| `method` | `POST` | `GET`, `POST`, `PUT`, `PATCH`, `DELETE` |
+| `headers` | none | string to string |
+| `body` | none | a string, or a JSON object/array (sent as `application/json` unless you set a content type) |
+| `timeout_ms` | 15 000 | capped at 60 000 |
+| `queue` | `webhooks` | the `webhooks` queue is created at boot if missing and never overwritten |
+| `max_attempts` | 5 | |
+| `delay_seconds` or `run_at` | now | deliver later; `run_at` is ISO 8601 with an offset. Give one, not both |
+
+The request is validated when the job is created, so a bad URL or method is a `422` now rather than a surprise at delivery time. The console's **New job** and **New cron** forms ("Call a URL") do the same without code, and show cron schedules in plain English ("Every day at 02:00 (Africa/Nairobi)").
+
+### What counts as delivered
+
+| Response | Outcome |
+|---|---|
+| any 2xx | completed |
+| 408, 429, any 5xx | failed attempt: retried with the usual exponential backoff, dead-lettered when attempts run out |
+| timeout, connection refused, DNS failure, TLS error | failed attempt: retried |
+| any other 4xx (400, 401, 404, 422, ...) | **permanent**: dead-lettered at once, since retrying cannot help |
+| a 3xx | permanent: redirects are not followed, and the error says so |
+| a target blocked by the safety rules below | permanent |
+
+Dead-lettering a permanent failure straight away uses a small extension to the worker contract: `perform/1` may return `{:discard, reason}` to skip the remaining attempts. Existing workers returning `:ok` or `{:error, _}` are unaffected. Every attempt is stored in `webhook_deliveries` (request URL and method, status, duration, the first 2 KB of the response, the error), shown as an attempts table on the job's detail page, and deleted with the job.
+
+### What the receiver sees
+
+Every request carries these headers, and a caller-supplied header of the same name cannot override them:
+
+| Header | Meaning |
+|---|---|
+| `x-dtq-job-id` | The job id, **stable across retries**. |
+| `x-dtq-attempt` | 1-based attempt number. |
+| `x-dtq-signature` | `t=<unix seconds>,v1=<hex HMAC-SHA256>` — see below. Omitted when no secret is configured (dev and test). |
+| `user-agent` | `dtq-webhook/<version>` |
+
+**Delivery is at-least-once.** A timeout can hide a request that actually succeeded, so a receiver should use `x-dtq-job-id` as an idempotency key: remember the ids it has handled and acknowledge repeats without redoing the work.
+
+### Verifying the signature
+
+The signature is the Stripe scheme: HMAC-SHA256, keyed with `DTQ_WEBHOOK_SECRET`, over the string `"<t>.<raw body>"`. Verify against the **raw bytes** of the body (not re-serialised JSON), compare in constant time, and reject old timestamps so a captured request cannot be replayed later.
+
+```python
+import hmac, hashlib, time
+
+def verify(secret: str, raw_body: bytes, header: str, tolerance: int = 300) -> bool:
+    parts = dict(p.split("=", 1) for p in header.split(","))
+    t, sig = parts["t"], parts["v1"]
+    if abs(time.time() - int(t)) > tolerance:
+        return False
+    expected = hmac.new(secret.encode(), f"{t}.".encode() + raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, sig)
+```
+
+```javascript
+const crypto = require("crypto");
+
+function verify(secret, rawBody, header, toleranceSeconds = 300) {
+  const parts = Object.fromEntries(header.split(",").map((p) => p.split("=")));
+  if (Math.abs(Date.now() / 1000 - Number(parts.t)) > toleranceSeconds) return false;
+  const expected = crypto
+    .createHmac("sha256", secret)
+    .update(`${parts.t}.`)
+    .update(rawBody) // a Buffer of the raw body, not parsed JSON
+    .digest("hex");
+  const a = Buffer.from(expected), b = Buffer.from(parts.v1);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+```
+
+### Not an open proxy
+
+A service that makes requests for strangers is an SSRF risk, so:
+
+- **Private addresses are blocked.** Before connecting, the resolved address must not be loopback, private, link-local (including the `169.254.169.254` cloud metadata address), IPv6 unique-local or unspecified. Blocked targets fail permanently with a clear message. This is on in production and off in dev and test (`config :distributed_task_queue, :webhooks, allow_private_targets: true`), so `localhost` receivers work while developing.
+- **Redirects are never followed**, so a public URL cannot bounce a request inward.
+- **`DTQ_WEBHOOK_TARGETS=demo` restricts a deployment to the demo receivers.** Anything else is rejected when the job is created, and again at delivery for jobs that predate the change. The public demo runs this way, because an open console with a free URL field would otherwise let any visitor make the server send signed, retried requests to any website.
+- **Secrets in headers are redacted on display.** The console and API responses show `••••` for `authorization`, `cookie`, `proxy-authorization` and any header whose name contains `token`, `secret`, `key` or `signature`. See [Known limitations](#known-limitations) for what that does not cover.
+
+### Recurring webhooks
+
+Recurring deliveries use the cron API with a `webhook` object (the same fields as above) in place of `worker_module` and `payload`:
+
+```bash
+curl -X POST localhost:4000/api/cron_jobs \
+  -H "authorization: Bearer $DTQ_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"name": "nightly-sync",
+       "queue_name": "webhooks",
+       "cron_expression": "0 2 * * *",
+       "timezone": "Africa/Nairobi",
+       "webhook": {"url": "https://example.com/hooks/sync", "method": "POST"}}'
+```
+
+### The demo
+
+With `DTQ_DEMO_MODE=true` the service tells its story through webhooks. A fictional shop, **Acme Store**, places an order every ten seconds; each order becomes three webhooks to in-app receivers (Payments, Email, Warehouse) that answer after a short random delay and occasionally fail, and a "daily sales report" webhook runs on a schedule. A **Demo controls** panel switches each receiver Online or Offline: take the Warehouse offline and its jobs start retrying with growing delays; bring it back and the backlog drains, and anything that ran out of attempts lands in Dead letter, where one click requeues it. Offline switches reset by themselves after five minutes. The Overview page opens with a short plain-English intro for first-time visitors.
 
 ## Scheduled jobs
 
@@ -317,7 +443,7 @@ mix credo             # linting
 mix dialyzer          # type checking
 ```
 
-218 tests, covering the API controllers and their authentication, every console page (filters, create/edit/delete, inline validation, live refresh from telemetry), the bootstrapper, cron scheduling and overlap policy, the ETS cache, pause semantics, live reconfiguration, orphan rescue, worker dispatch and its security boundary, and a dedicated concurrency suite that drives real parallel connections. CI runs the suite against PostgreSQL on every push and pull request.
+339 tests, covering the API controllers and their authentication, every console page (filters, create/edit/delete, inline validation, live refresh from telemetry), the bootstrapper, cron scheduling and overlap policy, the ETS cache, pause semantics, live reconfiguration, orphan rescue, worker dispatch and its security boundary, webhook validation, signing, delivery outcomes and target safety, the demo receivers, and a dedicated concurrency suite that drives real parallel connections. CI runs the suite against PostgreSQL on every push and pull request.
 
 ## Running locally
 
@@ -328,7 +454,7 @@ mix setup       # deps, database create + migrate, assets
 mix phx.server  # http://localhost:4000
 ```
 
-Then open http://localhost:4000 for the [web console](#web-console). Set `DTQ_DEMO_MODE=true` to have `DistributedTaskQueue.Demo` seed two demo queues and cron jobs that keep work flowing (`DemoWorker` sleeps a random interval and fails a share of the time). It prunes old finished jobs from those queues only. The cron jobs it creates live in the database and keep firing after demo mode is turned off, so delete them if you only wanted a look.
+Then open http://localhost:4000 for the [web console](#web-console). Set `DTQ_DEMO_MODE=true` to have `DistributedTaskQueue.Demo` start the Acme Store pipeline described under [Webhooks](#the-demo): a `demo` queue, the `acme-orders` and `acme-daily-sales-report` cron jobs, and the three in-app receivers. It prunes old finished jobs (and their deliveries) from the `demo` and `webhooks` queues only. The cron jobs it creates live in the database and keep firing after demo mode is turned off, so delete them if you only wanted a look. Webhooks to `localhost` work in development because the private-address check is off there.
 
 ## Deploying
 
@@ -337,12 +463,13 @@ The repo ships a release (`mix phx.gen.release --docker`: `Dockerfile`, `bin/mig
 ```bash
 fly launch --no-deploy          # reuse fly.toml; pick an app name
 fly postgres create && fly postgres attach <db-app>   # sets DATABASE_URL
-fly secrets set SECRET_KEY_BASE=$(mix phx.gen.secret) DTQ_API_KEYS=<key>
+fly secrets set SECRET_KEY_BASE=$(mix phx.gen.secret) DTQ_API_KEYS=<key> \
+  DTQ_WEBHOOK_SECRET=$(mix phx.gen.secret)
 fly deploy
 fly scale count 3               # nodes find each other over <app>.internal
 ```
 
-`rel/env.sh.eex` names each node after its private IPv6 address and points `DNS_CLUSTER_QUERY` at `<app>.internal`, so scaled machines join one BEAM cluster. As committed, `fly.toml` runs a **public demo** — `DTQ_PUBLIC_CONSOLE=true` and `DTQ_DEMO_MODE=true`. Remove both and set `DTQ_ADMIN_USERNAME` / `DTQ_ADMIN_PASSWORD` for a private deployment.
+`rel/env.sh.eex` names each node after its private IPv6 address and points `DNS_CLUSTER_QUERY` at `<app>.internal`, so scaled machines join one BEAM cluster. As committed, `fly.toml` runs a **public demo** — `DTQ_PUBLIC_CONSOLE=true`, `DTQ_DEMO_MODE=true` and `DTQ_WEBHOOK_TARGETS=demo`, which confines webhooks to the built-in receivers. Optionally set `DTQ_DEMO_API_KEY` to publish a key that lets visitors `curl` the demo. Remove the three and set `DTQ_ADMIN_USERNAME` / `DTQ_ADMIN_PASSWORD` for a private deployment; `DTQ_WEBHOOK_SECRET` is required either way.
 
 ## Known limitations
 
@@ -352,4 +479,8 @@ Deliberately listed, because they are the questions worth asking:
 - **Wake-ups are local to a node.** Enqueuing on node A wakes A's manager, not B's; B finds the work on its next poll. Enqueuing inside the caller's own transaction wakes the manager before the row is visible, so that job also waits for the next poll. The standard fix for both is `LISTEN/NOTIFY` after commit.
 - **A public console is fully interactive.** With `DTQ_PUBLIC_CONSOLE=true` anyone can pause, delete and requeue. Fine for a demo whose data is regenerated; there is no read-only mode or rate limit.
 - **Clustering is configured but not yet demonstrated.** `DNSCluster` is wired into the supervision tree and defaults to `:ignore`. Multi-node coordination is correct by construction — every claim path is a row contention — but the deployed proof is still to come.
+- **DNS rebinding between check and connect.** The private-address check resolves the hostname, then the HTTP client resolves it again to connect. A hostile DNS server could answer differently the second time. Pinning the connection to the checked address would close it; it has not been done.
+- **Stored header values are not encrypted at rest.** Credentials a caller puts in webhook `headers` sit in the job payload in plain text. They are redacted on display in the console and API, not protected in the database.
+- **`Retry-After` is ignored.** Every retry uses the same exponential backoff, even when a receiver asks for a specific delay.
+- **Webhook delivery is at-least-once.** Receivers must dedupe on `x-dtq-job-id`; there is no exactly-once mode.
 - **Throughput has a ceiling.** Coordinating through row locks means the database is the bottleneck under a single hot queue. That is the accepted cost of not running a broker.
