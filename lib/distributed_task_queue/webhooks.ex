@@ -133,7 +133,8 @@ defmodule DistributedTaskQueue.Webhooks do
   defp schedule(nil, nil), do: {:ok, nil}
   defp schedule(nil, run_at), do: parse_run_at(run_at)
 
-  defp schedule(delay, nil) when is_integer(delay) and delay >= 0 and delay <= @max_delay_seconds do
+  defp schedule(delay, nil)
+       when is_integer(delay) and delay >= 0 and delay <= @max_delay_seconds do
     {:ok, DateTime.utc_now() |> DateTime.add(delay, :second) |> DateTime.truncate(:second)}
   end
 

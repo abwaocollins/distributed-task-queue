@@ -241,7 +241,7 @@ That returns `201` with the job, whose id works with `GET /api/jobs/:id`; for we
 | `headers` | none | string to string |
 | `body` | none | a string, or a JSON object/array (sent as `application/json` unless you set a content type) |
 | `timeout_ms` | 15 000 | capped at 60 000 |
-| `queue` | `webhooks` | the `webhooks` queue is created at boot if missing and never overwritten |
+| `queue` | `webhooks` | the `webhooks` queue (concurrency 10) is created at boot if missing and never overwritten |
 | `max_attempts` | 5 | |
 | `delay_seconds` or `run_at` | now | deliver later; `run_at` is ISO 8601 with an offset. Give one, not both |
 
@@ -256,6 +256,7 @@ The request is validated when the job is created, so a bad URL or method is a `4
 | timeout, connection refused, DNS failure, TLS error | failed attempt: retried |
 | any other 4xx (400, 401, 404, 422, ...) | **permanent**: dead-lettered at once, since retrying cannot help |
 | a 3xx | permanent: redirects are not followed, and the error says so |
+| any other unexpected status (1xx, 600 and above) | permanent: dead-lettered |
 | a target blocked by the safety rules below | permanent |
 
 Dead-lettering a permanent failure straight away uses a small extension to the worker contract: `perform/1` may return `{:discard, reason}` to skip the remaining attempts. Existing workers returning `:ok` or `{:error, _}` are unaffected. Every attempt is stored in `webhook_deliveries` (request URL and method, status, duration, the first 2 KB of the response, the error), shown as an attempts table on the job's detail page, and deleted with the job.
@@ -281,12 +282,16 @@ The signature is the Stripe scheme: HMAC-SHA256, keyed with `DTQ_WEBHOOK_SECRET`
 import hmac, hashlib, time
 
 def verify(secret: str, raw_body: bytes, header: str, tolerance: int = 300) -> bool:
-    parts = dict(p.split("=", 1) for p in header.split(","))
-    t, sig = parts["t"], parts["v1"]
-    if abs(time.time() - int(t)) > tolerance:
+    try:
+        parts = dict(p.split("=", 1) for p in header.split(","))
+        t, sig = parts["t"], parts["v1"]
+        age = abs(time.time() - int(t))
+    except (KeyError, ValueError, AttributeError):
+        return False  # malformed header: fail closed
+    if age > tolerance:
         return False
     expected = hmac.new(secret.encode(), f"{t}.".encode() + raw_body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, sig)
+    return hmac.compare_digest(expected.encode(), sig.encode())
 ```
 
 ```javascript
@@ -294,7 +299,9 @@ const crypto = require("crypto");
 
 function verify(secret, rawBody, header, toleranceSeconds = 300) {
   const parts = Object.fromEntries(header.split(",").map((p) => p.split("=")));
-  if (Math.abs(Date.now() / 1000 - Number(parts.t)) > toleranceSeconds) return false;
+  const t = Number(parts.t);
+  if (!Number.isFinite(t) || !parts.v1) return false; // malformed header: fail closed
+  if (Math.abs(Date.now() / 1000 - t) > toleranceSeconds) return false;
   const expected = crypto
     .createHmac("sha256", secret)
     .update(`${parts.t}.`)
