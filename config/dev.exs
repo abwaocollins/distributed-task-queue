@@ -74,3 +74,6 @@ config :phoenix_live_view,
 
 # Disable swoosh api client as it is only required for production adapters.
 config :swoosh, :api_client, false
+
+# Local webhook receivers (and the demo ones) live on localhost.
+config :distributed_task_queue, :webhooks, allow_private_targets: true

@@ -77,6 +77,14 @@ config :distributed_task_queue, :reaper,
   rescue_after_seconds: 3_600,
   interval_ms: 60_000
 
+# Webhook targets. `targets: :demo_receivers` limits delivery to this app's own
+# demo receiver URLs (for a public demo). `allow_private_targets: false` refuses
+# loopback, LAN and cloud-metadata addresses so the service can't be used to
+# reach internal hosts.
+config :distributed_task_queue, :webhooks,
+  targets: :any,
+  allow_private_targets: false
+
 # Time zone database used to resolve cron jobs that declare a `timezone`.
 config :elixir, :time_zone_database, Tzdata.TimeZoneDatabase
 
