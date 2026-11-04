@@ -10,8 +10,15 @@ defmodule DistributedTaskQueue.MixProject do
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
-      test_coverage: [tool: ExCoveralls],
-      preferred_cli_env: [
+      test_coverage: [tool: ExCoveralls]
+    ]
+  end
+
+  # Mix tasks that should run in the test environment. (Moved out of project/0:
+  # `:preferred_cli_env` there is deprecated.)
+  def cli do
+    [
+      preferred_envs: [
         coveralls: :test,
         "coveralls.json": :test,
         "coveralls.html": :test,
