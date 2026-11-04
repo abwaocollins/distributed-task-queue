@@ -18,6 +18,19 @@ defmodule DistributedTaskQueue.WorkerTest do
     def perform(_payload), do: raise("boom")
   end
 
+  defmodule ContextWorker do
+    @behaviour DistributedTaskQueue.Worker
+    def perform_job(job) do
+      send(job.payload["pid"], {:got, job.id, job.attempts})
+      :ok
+    end
+  end
+
+  defmodule DiscardWorker do
+    @behaviour DistributedTaskQueue.Worker
+    def perform(_payload), do: {:discard, "permanent failure"}
+  end
+
   defp attach_handler(id, events) do
     test_pid = self()
 
@@ -68,5 +81,46 @@ defmodule DistributedTaskQueue.WorkerTest do
     Worker.run_job(job)
 
     assert_receive {:telemetry, [:dtq, :job, :failed], %{duration: _}, %{job_id: ^job_id, reason: "boom"}}
+  end
+
+  test "perform_job/1 receives the whole job" do
+    queue = insert(:queue)
+    job = insert(:job, queue_name: queue.name, worker_module: "DistributedTaskQueue.WorkerTest.ContextWorker")
+    # The pid cannot round-trip through the database, so set it on the in-memory struct.
+    job = %{job | payload: %{"pid" => self()}}
+    job_id = job.id
+    attempts = job.attempts
+
+    Worker.run_job(job)
+
+    assert_receive {:got, ^job_id, ^attempts}
+  end
+
+  test "{:discard, reason} dead-letters on the first attempt" do
+    queue = insert(:queue)
+
+    job =
+      insert(:job,
+        queue_name: queue.name,
+        worker_module: "DistributedTaskQueue.WorkerTest.DiscardWorker",
+        attempts: 0,
+        max_attempts: 5
+      )
+
+    Worker.run_job(job)
+
+    job = DistributedTaskQueue.Repo.get!(DistributedTaskQueue.Job, job.id)
+    assert job.status == "discarded"
+    assert job.dead_letter == true
+    assert job.error_message == "permanent failure"
+  end
+
+  test "perform/1 workers are unaffected" do
+    queue = insert(:queue)
+    job = insert(:job, queue_name: queue.name, worker_module: "DistributedTaskQueue.WorkerTest.SuccessWorker")
+
+    Worker.run_job(job)
+
+    assert DistributedTaskQueue.Repo.get!(DistributedTaskQueue.Job, job.id).status == "completed"
   end
 end
