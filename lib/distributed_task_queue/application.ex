@@ -17,10 +17,15 @@ defmodule DistributedTaskQueue.Application do
         {Finch, name: DistributedTaskQueue.Finch},
         {Registry, keys: :unique, name: DistributedTaskQueue.WorkerRegistry},
         DistributedTaskQueue.WorkerSupervisor,
-        DistributedTaskQueue.QueueCache,
-        DistributedTaskQueue.QueueBootstrapper
+        DistributedTaskQueue.QueueCache
       ] ++
-        cron_scheduler_child() ++
+        # Before QueueBootstrapper, so jobs this node orphaned when it last went
+        # down are back in the queue by the time its managers start claiming.
+        optional_child(:start_reaper, DistributedTaskQueue.Reaper) ++
+        [DistributedTaskQueue.QueueBootstrapper] ++
+        # Seeds demo queues and crons before the scheduler starts reading them.
+        optional_child(:demo_mode, DistributedTaskQueue.Demo, false) ++
+        optional_child(:start_cron_scheduler, DistributedTaskQueue.CronScheduler) ++
         [DistributedTaskQueueWeb.Endpoint]
 
     # See https://hexdocs.pm/elixir/Supervisor.html
@@ -34,15 +39,11 @@ defmodule DistributedTaskQueue.Application do
     Supervisor.start_link(children, opts)
   end
 
-  # Safe to run on every node — CronScheduler claims each tick with a
-  # conditional UPDATE, so only one node wins. Disabled in test, where its timer
-  # would poll outside the Ecto sandbox.
-  defp cron_scheduler_child do
-    if Application.get_env(:distributed_task_queue, :start_cron_scheduler, true) do
-      [DistributedTaskQueue.CronScheduler]
-    else
-      []
-    end
+  # Both are safe to run on every node — CronScheduler claims each tick with a
+  # conditional UPDATE, and the Reaper locks the rows it rescues. Disabled in
+  # test, where their timers would poll outside the Ecto sandbox.
+  defp optional_child(flag, child, default \\ true) do
+    if Application.get_env(:distributed_task_queue, flag, default), do: [child], else: []
   end
 
   # Tell Phoenix to update the endpoint configuration

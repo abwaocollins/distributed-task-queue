@@ -1,12 +1,3 @@
-defmodule DistributedTaskQueue.LiveChangesTest.SlowWorker do
-  @behaviour DistributedTaskQueue.Worker
-
-  def perform(%{"sleep_ms" => ms}) do
-    Process.sleep(ms)
-    :ok
-  end
-end
-
 defmodule DistributedTaskQueue.LiveChangesTest do
   @moduledoc """
   Changes made at runtime (from the console or API) take effect without
@@ -17,7 +8,7 @@ defmodule DistributedTaskQueue.LiveChangesTest do
 
   alias DistributedTaskQueue.{CronScheduler, Job, QueueCache, Repo, WorkerSupervisor}
 
-  @slow "DistributedTaskQueue.LiveChangesTest.SlowWorker"
+  @slow "DistributedTaskQueue.Test.SlowWorker"
   @quick "DistributedTaskQueue.EmailWorker"
 
   setup do

@@ -240,10 +240,12 @@ defmodule DistributedTaskQueue.CronScheduler do
     end
   end
 
+  # "retryable" counts as active: a run backing off between attempts has not
+  # finished, so overlap: false must not start another one alongside it.
   defp no_active_jobs?(cron_id) do
     not Repo.exists?(
       from j in Job,
-        where: j.cron_job_id == ^cron_id and j.status in ["pending", "started"]
+        where: j.cron_job_id == ^cron_id and j.status in ["pending", "started", "retryable"]
     )
   end
 

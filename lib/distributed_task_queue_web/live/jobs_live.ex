@@ -245,6 +245,7 @@ defmodule DistributedTaskQueueWeb.JobsLive do
             <th class={th_class()}>Job</th>
             <th class={th_class()}>Worker</th>
             <th class={th_class()}>Status</th>
+            <th class={th_class()}>Node</th>
             <th class={[th_class(), "text-right"]}>Attempts</th>
             <th class={[th_class(), "w-2/5"]}>Last error</th>
             <th class={[th_class(), "text-right"]}>Updated</th>
@@ -263,6 +264,9 @@ defmodule DistributedTaskQueueWeb.JobsLive do
               {short_module(job.worker_module)}
             </td>
             <td class={td_class()}><.job_status job={job} /></td>
+            <td class={[td_class(), "whitespace-nowrap font-mono text-xs text-zinc-500 dark:text-zinc-400"]}>
+              {node_of(job.attempted_by) || "—"}
+            </td>
             <td class={num_class()}>{job.attempts}/{job.max_attempts}</td>
             <td class={[td_class(), "max-w-xs"]}>
               <.error_text message={job.error_message} />

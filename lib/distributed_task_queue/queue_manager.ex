@@ -39,12 +39,32 @@ defmodule DistributedTaskQueue.QueueManager do
     end
   end
 
+  @doc """
+  Ids of the jobs this node's manager for `queue_name` is running right now.
+
+  Lets the reaper tell a job that is merely slow from one whose worker is gone.
+  Empty when the queue has no manager here.
+  """
+  def running_job_ids(queue_name) do
+    case Registry.lookup(DistributedTaskQueue.WorkerRegistry, queue_name) do
+      [{pid, _}] -> GenServer.call(pid, :running_job_ids)
+      [] -> MapSet.new()
+    end
+  catch
+    :exit, _ -> MapSet.new()
+  end
+
   def init(%{max: max} = state) do
     Process.flag(:trap_exit, true)
     # Look for work straight away. The manager is started because something
     # just became claimable; waiting a full poll interval only delays it.
     send(self(), :poll)
     {:ok, Map.merge(state, %{free_slots: MapSet.new(1..max//1), task_slots: %{}})}
+  end
+
+  def handle_call(:running_job_ids, _from, state) do
+    ids = state.task_slots |> Map.values() |> MapSet.new(fn {_pid, job_id} -> job_id end)
+    {:reply, ids, state}
   end
 
   def handle_call(:wake, _from, state) do
@@ -113,7 +133,7 @@ defmodule DistributedTaskQueue.QueueManager do
         new_state = %{state |
           running: running + 1,
           free_slots: MapSet.delete(state.free_slots, slot),
-          task_slots: Map.put(state.task_slots, slot, pid)
+          task_slots: Map.put(state.task_slots, slot, {pid, job.id})
         }
 
         if new_state.running < max, do: send(self(), :poll)
@@ -163,7 +183,7 @@ defmodule DistributedTaskQueue.QueueManager do
   defp return_slot(free_slots, slot, _max), do: MapSet.put(free_slots, slot)
 
   defp pop_by_pid(task_slots, pid) do
-    case Enum.find(task_slots, fn {_, p} -> p == pid end) do
+    case Enum.find(task_slots, fn {_, {p, _job_id}} -> p == pid end) do
       {slot, _} -> {slot, Map.delete(task_slots, slot)}
       nil -> {nil, task_slots}
     end

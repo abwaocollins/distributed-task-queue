@@ -77,15 +77,15 @@ end
 
 ## Verification
 
-From a one-off run at the time of the fix, **40 trials of 5 jobs against 5 concurrent claimers** (the trial loop itself is not committed; the invariants below are checked by the committed tests on every run):
+The first two rows are from the investigation at the time of the fix. The shipped row is from the committed harness, `claim_trials_test.exs` — run it with `mix test --only trials` (`DTQ_TRIALS`, `DTQ_JOBS`, `DTQ_CLAIMERS` to change the shape). It measured 40 trials of 5 jobs × 5 concurrent claimers, and separately 200 trials of 10 × 10, on a single node with zero duplicates, stranded or lost rows in either run:
 
 | Version | Duplicate claims | Stranded in `started` | Lost rows | Claimed per trial |
 |---|---|---|---|---|
 | Original single statement | yes (forced interleaving) | 0 | 0 | 3–4 of 5 |
 | First fix (`SKIP LOCKED` in subquery) | 0 | **yes** | 0 | — |
-| Shipped (select-then-update in a transaction) | **0** | **0** | **0** | 3–5 of 5 |
+| Shipped (select-then-update in a transaction) | **0** | **0** | **0** | 5 of 5 in all 40 trials (3–5 seen earlier, in the single-trial test) |
 
-The guarantee is the first three columns. Throughput is best-effort: in a simultaneous burst a claimer can come back empty while work exists, so the count varies between runs. That costs one poll cycle; the row stays `pending` and claimable.
+The guarantee is the first three columns. Throughput is best-effort: in a simultaneous burst a claimer can come back empty while work exists, so the count can vary between runs — the harness reports it rather than asserting it. That costs one poll cycle; the row stays `pending` and claimable.
 
 ## Testing concurrency honestly
 

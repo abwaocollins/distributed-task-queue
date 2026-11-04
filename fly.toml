@@ -1,0 +1,40 @@
+# Fly.io config. `fly launch --no-deploy` will offer to reuse this; set `app`
+# to the name you pick. Secrets (not in this file):
+#   fly secrets set SECRET_KEY_BASE=$(mix phx.gen.secret) \
+#     DTQ_API_KEYS=... DTQ_ADMIN_USERNAME=... DTQ_ADMIN_PASSWORD=...
+# DATABASE_URL is set by `fly postgres attach`.
+
+app = "distributed-task-queue"
+primary_region = "jnb"
+kill_signal = "SIGTERM"
+
+[build]
+
+[deploy]
+  release_command = "/app/bin/migrate"
+
+[env]
+  PHX_HOST = "distributed-task-queue.fly.dev"
+  PORT = "8080"
+  # Public demo: console open (mutations included), LiveDashboard locked,
+  # demo data generator on. Remove both for a private deployment.
+  DTQ_PUBLIC_CONSOLE = "true"
+  DTQ_DEMO_MODE = "true"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Keep machines running: the queue managers and cron scheduler are the app.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 1000
+    soft_limit = 1000
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1

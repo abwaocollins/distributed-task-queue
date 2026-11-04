@@ -12,12 +12,22 @@ defmodule DistributedTaskQueueWeb.Router do
 
   pipeline :api do
     plug :accepts, ["json"]
+    plug DistributedTaskQueueWeb.Plugs.ApiAuth
+  end
+
+  pipeline :console_auth do
+    plug DistributedTaskQueueWeb.Plugs.AdminAuth, scope: :console
+  end
+
+  pipeline :dashboard_auth do
+    plug DistributedTaskQueueWeb.Plugs.AdminAuth, scope: :dashboard
   end
 
   scope "/", DistributedTaskQueueWeb do
-    pipe_through :browser
+    pipe_through [:browser, :console_auth]
 
-    live_session :console, on_mount: DistributedTaskQueueWeb.LiveRefresh do
+    live_session :console,
+      on_mount: [DistributedTaskQueueWeb.ConsoleAuth, DistributedTaskQueueWeb.LiveRefresh] do
       live "/", OverviewLive, :index
 
       live "/queues", QueuesLive, :index
@@ -47,21 +57,30 @@ defmodule DistributedTaskQueueWeb.Router do
     post "/jobs/:id/requeue", JobController, :requeue
     post "/jobs/requeue_dead_letter", JobController, :requeue_all
     resources "/jobs", JobController, only: [:index, :show, :create, :delete]
+
+    post "/cron_jobs/:id/enable", CronJobController, :enable
+    post "/cron_jobs/:id/disable", CronJobController, :disable
+    resources "/cron_jobs", CronJobController, except: [:new, :edit]
   end
 
-  # Enable LiveDashboard and Swoosh mailbox preview in development
-  if Application.compile_env(:distributed_task_queue, :dev_routes) do
-    # If you want to use the LiveDashboard in production, you should put
-    # it behind authentication and allow only admins to access it.
-    # If your application does not have an admins-only section yet,
-    # you can use Plug.BasicAuth to set up some basic authentication
-    # as long as you are also using SSL (which you should anyway).
-    import Phoenix.LiveDashboard.Router
+  import Phoenix.LiveDashboard.Router
 
+  # In every environment, behind admin basic auth wherever credentials are set.
+  # The `dtq.*` metrics and BEAM process/memory views are worth showing in
+  # production; open to the internet they would leak far too much.
+  scope "/admin" do
+    pipe_through [:browser, :dashboard_auth]
+
+    live_dashboard "/dashboard",
+      metrics: DistributedTaskQueueWeb.Telemetry,
+      on_mount: [{DistributedTaskQueueWeb.ConsoleAuth, :dashboard}]
+  end
+
+  # Swoosh mailbox preview in development only.
+  if Application.compile_env(:distributed_task_queue, :dev_routes) do
     scope "/dev" do
       pipe_through :browser
 
-      live_dashboard "/dashboard", metrics: DistributedTaskQueueWeb.Telemetry
       forward "/mailbox", Plug.Swoosh.MailboxPreview
     end
   end

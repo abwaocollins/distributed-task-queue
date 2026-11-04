@@ -76,6 +76,10 @@ defmodule DistributedTaskQueueWeb.Telemetry do
         tags: [:queue_name, :worker_module],
         unit: {:millisecond, :millisecond}
       ),
+      # Non-zero means workers are dying mid-job (node loss, kills, OOM).
+      counter("dtq.job.rescued.count",
+        tags: [:queue_name, :reason]
+      ),
 
       # DTQ Cron Metrics
       # `skipped` is the one to watch: a cron that skips forever is an

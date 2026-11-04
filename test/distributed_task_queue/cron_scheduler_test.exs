@@ -99,6 +99,19 @@ defmodule DistributedTaskQueue.CronSchedulerTest do
       assert length(Repo.all(from j in Job, where: j.cron_job_id == ^cron.id)) == 1
     end
 
+    test "overlap=false: skips fire while the previous run is waiting to retry" do
+      cron = insert(:cron_job,
+        enabled: true,
+        overlap: false,
+        next_run_at: DateTime.add(DateTime.utc_now(), -1, :second) |> DateTime.truncate(:second)
+      )
+      insert(:job, queue_name: cron.queue_name, cron_job_id: cron.id, status: "retryable")
+
+      CronScheduler.fire_due_crons()
+
+      assert length(Repo.all(from j in Job, where: j.cron_job_id == ^cron.id)) == 1
+    end
+
     test "overlap=true: fires even when an active job exists" do
       cron = insert(:cron_job,
         enabled: true,

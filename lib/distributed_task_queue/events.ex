@@ -20,6 +20,7 @@ defmodule DistributedTaskQueue.Events do
     [:dtq, :job, :started],
     [:dtq, :job, :completed],
     [:dtq, :job, :failed],
+    [:dtq, :job, :rescued],
     [:dtq, :cron, :fired],
     [:dtq, :cron, :skipped],
     [:dtq, :cron, :failed]

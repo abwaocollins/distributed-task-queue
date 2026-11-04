@@ -24,8 +24,8 @@
     </nav>
     <div class="hidden shrink-0 items-center gap-4 text-sm text-zinc-500 md:flex dark:text-zinc-400">
       <a
-        :if={Application.get_env(:distributed_task_queue, :dev_routes)}
-        href="/dev/dashboard"
+        :if={DistributedTaskQueueWeb.Auth.requirement(:dashboard) != :locked}
+        href="/admin/dashboard"
         class="hover:text-zinc-900 dark:hover:text-zinc-100"
       >
         BEAM metrics

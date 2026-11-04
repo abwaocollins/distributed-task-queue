@@ -20,6 +20,11 @@ if System.get_env("PHX_SERVER") do
   config :distributed_task_queue, DistributedTaskQueueWeb.Endpoint, server: true
 end
 
+# Public-demo data generator (DistributedTaskQueue.Demo). Never in test.
+if config_env() != :test and System.get_env("DTQ_DEMO_MODE") == "true" do
+  config :distributed_task_queue, demo_mode: true
+end
+
 if config_env() == :prod do
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you
@@ -33,10 +38,53 @@ if config_env() == :prod do
       You can generate one by calling: mix phx.gen.secret
       """
 
+  database_url =
+    System.get_env("DATABASE_URL") ||
+      raise """
+      environment variable DATABASE_URL is missing.
+      For example: ecto://USER:PASS@HOST/DATABASE
+      """
+
+  maybe_ipv6 = if System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: []
+
+  config :distributed_task_queue, DistributedTaskQueue.Repo,
+    url: database_url,
+    pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
+    socket_options: maybe_ipv6
+
   host = System.get_env("PHX_HOST") || "example.com"
   port = String.to_integer(System.get_env("PORT") || "4000")
 
   config :distributed_task_queue, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
+
+  # API keys for /api/*, comma-separated. Unset means the API is locked: an open
+  # job-creation endpoint on the internet will be abused.
+  config :distributed_task_queue,
+         :api_keys,
+         (System.get_env("DTQ_API_KEYS") || "")
+         |> String.split(",", trim: true)
+         |> Enum.map(&String.trim/1)
+
+  # Basic auth for the console and LiveDashboard. A public demo can opt out for
+  # the console only with DTQ_PUBLIC_CONSOLE=true; LiveDashboard stays locked.
+  admin_auth =
+    case {System.get_env("DTQ_ADMIN_USERNAME"), System.get_env("DTQ_ADMIN_PASSWORD")} do
+      {user, pass} when is_binary(user) and is_binary(pass) and pass != "" ->
+        [username: user, password: pass]
+
+      _ ->
+        if System.get_env("DTQ_PUBLIC_CONSOLE") == "true" do
+          :public_console
+        else
+          raise """
+          DTQ_ADMIN_USERNAME and DTQ_ADMIN_PASSWORD are not set.
+          The console can pause, delete and requeue; it will not start unprotected.
+          Set both, or set DTQ_PUBLIC_CONSOLE=true to deliberately run a public console.
+          """
+        end
+    end
+
+  config :distributed_task_queue, :admin_auth, admin_auth
 
   config :distributed_task_queue, DistributedTaskQueueWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],

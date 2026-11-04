@@ -70,6 +70,13 @@ config :logger, :console,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+# Orphan-job reaper: a job still `started` after this long is assumed to have
+# lost its worker and is retried. Set it above your slowest job's runtime, or
+# that job will be run twice.
+config :distributed_task_queue, :reaper,
+  rescue_after_seconds: 3_600,
+  interval_ms: 60_000
+
 # Time zone database used to resolve cron jobs that declare a `timezone`.
 config :elixir, :time_zone_database, Tzdata.TimeZoneDatabase
 
