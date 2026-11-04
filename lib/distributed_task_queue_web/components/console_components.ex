@@ -175,9 +175,38 @@ defmodule DistributedTaskQueueWeb.ConsoleComponents do
 
   def job_status(assigns) do
     ~H"""
-    <span class={[badge_class(), status_tone(@job)]}>{status_label(@job)}</span>
+    <span class={[badge_class(), status_tone(@job)]} title={status_hint(@job)}>
+      {status_label(@job)}
+    </span>
     """
   end
+
+  @doc "A plain-English sentence for the badge tooltip, for readers new to job queues."
+  @spec status_hint(map()) :: String.t()
+  def status_hint(%{dead_letter: true} = job) do
+    n = Map.get(job, :attempts) || 0
+    "Gave up after #{n} #{pluralize(n, "try", "tries")}"
+  end
+
+  def status_hint(%{status: "pending"}), do: "Waiting its turn"
+  def status_hint(%{status: "started"}), do: "Running now"
+  def status_hint(%{status: "completed"}), do: "Done"
+
+  def status_hint(%{status: "retryable"} = job) do
+    case Map.get(job, :next_retry_at) do
+      nil -> "Failed — will try again soon"
+      at -> "Failed — will try again at #{hhmm(at)} UTC"
+    end
+  end
+
+  def status_hint(%{status: status}) when status in ["discarded", "dead"],
+    do: "Gave up — it ran out of tries"
+
+  def status_hint(_), do: ""
+
+  @doc "HH:MM in UTC."
+  def hhmm(%NaiveDateTime{} = at), do: Calendar.strftime(at, "%H:%M")
+  def hhmm(%DateTime{} = at), do: at |> DateTime.shift_zone!("Etc/UTC") |> Calendar.strftime("%H:%M")
 
   def status_label(%{dead_letter: true}), do: "Dead letter"
   def status_label(%{status: status}), do: status_name(status)

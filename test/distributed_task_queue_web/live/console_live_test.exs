@@ -610,7 +610,15 @@ defmodule DistributedTaskQueueWeb.ConsoleLiveTest do
 
     test "the cron list and overview show the plain-English schedule", %{conn: conn} do
       queue = insert(:queue)
-      insert(:cron_job, name: "morning", queue_name: queue.name, interval_seconds: nil, cron_expression: "0 9 * * 1", timezone: "Africa/Nairobi")
+
+      insert(:cron_job,
+        name: "morning",
+        queue_name: queue.name,
+        interval_seconds: nil,
+        cron_expression: "0 9 * * 1",
+        timezone: "Africa/Nairobi"
+      )
+
       insert(:cron_job, name: "frequent", queue_name: queue.name, interval_seconds: 30)
 
       {:ok, _view, html} = live(conn, ~p"/cron")
@@ -659,7 +667,9 @@ defmodule DistributedTaskQueueWeb.ConsoleLiveTest do
       {:ok, view, _html} = live(conn, ~p"/cron/#{cron.id}/edit")
 
       view
-      |> form("#cron-form", cron: %{webhook: %{headers: %{"0" => %{key: "authorization", value: "Bearer new"}}}})
+      |> form("#cron-form",
+        cron: %{webhook: %{headers: %{"0" => %{key: "authorization", value: "Bearer new"}}}}
+      )
       |> render_submit()
 
       assert Repo.reload!(cron).payload["headers"]["authorization"] == "Bearer new"
@@ -670,6 +680,89 @@ defmodule DistributedTaskQueueWeb.ConsoleLiveTest do
       {:ok, view, _html} = live(conn, ~p"/cron/#{cron.id}/edit")
       assert has_element?(view, "input[name='cron[worker_module]']")
       refute has_element?(view, "input[name='cron[webhook][url]']")
+    end
+  end
+
+  describe "demo" do
+    alias DistributedTaskQueue.Demo.Receivers
+
+    setup do
+      Receivers.ensure_all()
+      Receivers.set_online("warehouse", true)
+
+      for key <- [:demo_mode, :demo_api_key] do
+        old = Application.fetch_env(:distributed_task_queue, key)
+
+        on_exit(fn ->
+          case old do
+            {:ok, v} -> Application.put_env(:distributed_task_queue, key, v)
+            :error -> Application.delete_env(:distributed_task_queue, key)
+          end
+        end)
+      end
+
+      :ok
+    end
+
+    test "demo controls toggle a receiver offline and back", %{conn: conn} do
+      Application.put_env(:distributed_task_queue, :demo_mode, true)
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      view |> element("#receiver-warehouse button") |> render_click()
+      refute Receivers.online?("warehouse")
+      assert render(view) =~ "back online at"
+
+      view |> element("#receiver-warehouse button") |> render_click()
+      assert Receivers.online?("warehouse")
+    end
+
+    test "an unknown receiver name is ignored", %{conn: conn} do
+      Application.put_env(:distributed_task_queue, :demo_mode, true)
+      {:ok, view, _html} = live(conn, ~p"/")
+      render_click(view, "toggle_receiver", %{"name" => "nope"})
+      assert render(view) =~ "Overview"
+    end
+
+    test "demo controls are hidden outside demo mode", %{conn: conn} do
+      Application.put_env(:distributed_task_queue, :demo_mode, false)
+      {:ok, view, html} = live(conn, ~p"/")
+      refute html =~ "Demo controls"
+      refute has_element?(view, "#receiver-warehouse")
+    end
+
+    test "intro shows the demo key and curl example when configured", %{conn: conn} do
+      Application.put_env(:distributed_task_queue, :demo_mode, true)
+      Application.put_env(:distributed_task_queue, :demo_api_key, "key-abc-123")
+      {:ok, view, _html} = live(conn, ~p"/")
+      intro = view |> element("#demo-intro") |> render()
+      assert intro =~ "key-abc-123"
+      assert intro =~ "curl"
+      assert intro =~ "/demo/receivers/warehouse"
+    end
+
+    test "intro omits the curl example without a key", %{conn: conn} do
+      Application.put_env(:distributed_task_queue, :demo_api_key, nil)
+      {:ok, view, _html} = live(conn, ~p"/")
+      refute view |> element("#demo-intro") |> render() =~ "curl"
+    end
+
+    test "status badges explain themselves", %{conn: conn} do
+      at = DateTime.utc_now() |> DateTime.add(600) |> DateTime.truncate(:second)
+
+      job =
+        insert(:job, status: "retryable", attempts: 1, error_message: "boom", next_retry_at: at)
+
+      {:ok, view, _html} = live(conn, ~p"/")
+      assert view |> element("#failure-#{job.id}") |> render() =~ "will try again at"
+    end
+
+    test "status hints cover every state" do
+      import DistributedTaskQueueWeb.ConsoleComponents, only: [status_hint: 1]
+      assert status_hint(%{dead_letter: true, attempts: 1}) == "Gave up after 1 try"
+      assert status_hint(%{dead_letter: true, attempts: 3}) == "Gave up after 3 tries"
+      assert status_hint(%{dead_letter: false, status: "pending"}) == "Waiting its turn"
+      assert status_hint(%{dead_letter: false, status: "started"}) == "Running now"
+      assert status_hint(%{dead_letter: false, status: "completed"}) == "Done"
     end
   end
 

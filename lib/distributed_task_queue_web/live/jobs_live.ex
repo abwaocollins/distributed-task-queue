@@ -404,7 +404,7 @@ defmodule DistributedTaskQueueWeb.JobsLive do
             <th class={th_class()}>Job</th>
             <th class={th_class()}>Worker</th>
             <th class={th_class()}>Status</th>
-            <th class={th_class()}>Node</th>
+            <th class={th_class()} title="Which server ran it">Node</th>
             <th class={[th_class(), "text-right"]}>Attempts</th>
             <th class={[th_class(), "w-2/5"]}>Last error</th>
             <th class={[th_class(), "text-right"]}>Updated</th>

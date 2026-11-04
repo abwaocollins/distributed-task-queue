@@ -22,9 +22,34 @@ import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import topbar from "../vendor/topbar"
 
+// Hides the intro once a visitor has dismissed it. Storage can be blocked
+// (private windows), so every access is guarded and the intro just stays.
+const KEY = "dtq:intro-dismissed"
+const Hooks = {
+  DismissOnce: {
+    mounted() {
+      try {
+        if (localStorage.getItem(KEY) === "1") this.el.style.display = "none"
+      } catch (_e) {}
+      this.el.querySelectorAll("[data-dismiss]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          try { localStorage.setItem(KEY, "1") } catch (_e) {}
+          this.el.style.display = "none"
+        })
+      })
+    },
+    updated() {
+      try {
+        if (localStorage.getItem(KEY) === "1") this.el.style.display = "none"
+      } catch (_e) {}
+    }
+  }
+}
+
 let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 let liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
+  hooks: Hooks,
   params: {_csrf_token: csrfToken}
 })
 
