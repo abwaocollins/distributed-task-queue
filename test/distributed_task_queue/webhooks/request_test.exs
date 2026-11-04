@@ -83,6 +83,16 @@ defmodule DistributedTaskQueue.Webhooks.RequestTest do
       end
     end
 
+    test "rejects header names and values with a trailing newline" do
+      for headers <- [%{"x-a
+" => "v"}, %{"x-a
+" => "v"}, %{"x-a" => "v
+"}] do
+        assert {:error, [{:headers, _}]} =
+                 Request.normalize(%{"url" => "https://example.com", "headers" => headers})
+      end
+    end
+
     test "rejects header names that differ only by case" do
       assert {:error, [{:headers, _}]} =
                Request.normalize(%{

@@ -14,7 +14,7 @@ defmodule DistributedTaskQueue.Webhooks.Request do
 
   @masked "••••"
 
-  @header_name ~r/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
+  @header_name ~r/\A[!#$%&'*+\-.^_`|~0-9A-Za-z]+\z/
   # Control characters except tab, plus DEL.
   @bad_value_chars ~r/[\x00-\x08\x0A-\x1F\x7F]/
 
