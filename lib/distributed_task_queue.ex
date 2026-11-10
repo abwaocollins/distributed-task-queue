@@ -322,18 +322,31 @@ defmodule DistributedTaskQueue do
   # attempts=0 → 15s, 1 → 30s, 2 → 60s, 3 → 120s, …, 8+ → 3600s
   defp backoff_seconds(attempts), do: min(15 * Integer.pow(2, attempts), 3_600)
 
-  # Returns milliseconds until the earliest retryable job in the queue becomes claimable,
-  # or nil if none exist. Used by QueueManager to avoid shutting down prematurely.
-  def next_retryable_delay(queue_name) do
+  # Returns milliseconds until the earliest waiting job in the queue becomes claimable —
+  # a retryable job's next_retry_at or a pending job's scheduled_at — or nil if none
+  # exist. Used by QueueManager to avoid shutting down while work is still coming due.
+  def next_due_delay(queue_name) do
     now = DateTime.utc_now()
 
     next =
       Repo.one(
         from j in Job,
-          where: j.queue_name == ^queue_name and j.status == "retryable" and not is_nil(j.next_retry_at),
-          order_by: [asc: j.next_retry_at],
-          limit: 1,
-          select: j.next_retry_at
+          where:
+            j.queue_name == ^queue_name and is_nil(j.worker_id) and
+              ((j.status == "retryable" and not is_nil(j.next_retry_at)) or
+                 (j.status == "pending" and not is_nil(j.scheduled_at))),
+          select:
+            type(
+              min(
+                fragment(
+                  "CASE WHEN ? = 'retryable' THEN ? ELSE ? END",
+                  j.status,
+                  j.next_retry_at,
+                  j.scheduled_at
+                )
+              ),
+              :utc_datetime
+            )
       )
 
     case next do

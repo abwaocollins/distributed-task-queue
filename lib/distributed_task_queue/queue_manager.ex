@@ -3,6 +3,8 @@ defmodule DistributedTaskQueue.QueueManager do
   alias DistributedTaskQueue.{Worker, QueueCache}
 
   @poll_interval 5_000
+  @min_wait 100
+  @max_wait 60_000
 
   def start_link({queue_name, max_concurrency}) do
     GenServer.start_link(__MODULE__,
@@ -140,12 +142,15 @@ defmodule DistributedTaskQueue.QueueManager do
         {:noreply, new_state}
 
       {:error, :no_jobs} when running == 0 ->
-        case DistributedTaskQueue.next_retryable_delay(state.queue) do
+        case DistributedTaskQueue.next_due_delay(state.queue) do
           nil ->
             {:stop, :normal, state}
 
+          # Wake just as the job comes due, but re-check at least every minute so a
+          # far-off job doesn't pin a timer and an earlier one inserted directly into
+          # the database is still noticed.
           delay_ms ->
-            Process.send_after(self(), :poll, max(delay_ms, @poll_interval))
+            Process.send_after(self(), :poll, delay_ms |> max(@min_wait) |> min(@max_wait))
             {:noreply, state}
         end
 
