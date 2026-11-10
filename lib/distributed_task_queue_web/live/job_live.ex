@@ -1,11 +1,11 @@
 defmodule DistributedTaskQueueWeb.JobLive do
-  @moduledoc "One job: status, full error, payload, timeline, and requeue/delete."
+  @moduledoc "One job: status, full error, payload, timeline, and retry/stop/delete."
   use DistributedTaskQueueWeb, :live_view
 
   alias DistributedTaskQueue.{Dashboard, Events, Webhooks}
   alias DistributedTaskQueue.Webhooks.Request
   alias DistributedTaskQueue.Workers.Webhook
-  alias DistributedTaskQueueWeb.LiveRefresh
+  alias DistributedTaskQueueWeb.{JobActions, LiveRefresh}
 
   @impl true
   def mount(%{"id" => raw_id}, _session, socket) do
@@ -28,22 +28,11 @@ defmodule DistributedTaskQueueWeb.JobLive do
   def refresh(socket), do: socket
 
   @impl true
-  def handle_event("requeue", _params, socket) do
-    socket =
-      case DistributedTaskQueue.requeue_dead_letter_job(socket.assigns.job_id) do
-        {:ok, job} ->
-          Events.broadcast([:dtq, :console, :requeued], %{job_id: job.id})
-          put_flash(socket, :info, "Job ##{job.id} requeued.")
+  def handle_event("retry", _params, socket),
+    do: {:noreply, socket |> JobActions.retry(socket.assigns.job_id) |> LiveRefresh.refresh()}
 
-        {:error, :not_dead_letter} ->
-          put_flash(socket, :error, "Only dead-letter jobs can be requeued.")
-
-        {:error, _} ->
-          put_flash(socket, :error, "Job could not be requeued.")
-      end
-
-    {:noreply, LiveRefresh.refresh(socket)}
-  end
+  def handle_event("stop", _params, socket),
+    do: {:noreply, socket |> JobActions.stop(socket.assigns.job_id) |> LiveRefresh.refresh()}
 
   def handle_event("delete", _params, socket) do
     case DistributedTaskQueue.delete_job(socket.assigns.job_id) do
@@ -92,12 +81,20 @@ defmodule DistributedTaskQueueWeb.JobLive do
       <:actions>
         <.job_status job={@job} />
         <.btn
-          :if={@job.dead_letter}
+          :if={JobActions.retryable?(@job)}
           variant={:primary}
-          phx-click="requeue"
-          phx-disable-with="Requeuing"
+          phx-click="retry"
+          phx-disable-with="Queuing"
         >
-          Requeue
+          {JobActions.retry_label(@job)}
+        </.btn>
+        <.btn
+          :if={JobActions.stoppable?(@job)}
+          phx-click="stop"
+          phx-disable-with="Stopping"
+          data-confirm={"Stop job ##{@job.id}?"}
+        >
+          Stop
         </.btn>
         <.btn
           :if={@job.status != "started"}

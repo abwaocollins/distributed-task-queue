@@ -64,6 +64,35 @@ defmodule DistributedTaskQueueWeb.JobController do
     end
   end
 
+  def retry(conn, %{"id" => id}) do
+    case DistributedTaskQueue.retry_job(id) do
+      {:ok, job} ->
+        json(conn, %{data: job_json(job)})
+
+      {:error, :not_found} ->
+        conn |> put_status(:not_found) |> json(%{error: "not found"})
+
+      {:error, :job_running} ->
+        conn |> put_status(:conflict) |> json(%{error: "job is currently running; stop it first"})
+
+      {:error, :not_retryable} ->
+        conn |> put_status(:unprocessable_entity) |> json(%{error: "job cannot be retried"})
+    end
+  end
+
+  def stop(conn, %{"id" => id}) do
+    case DistributedTaskQueue.cancel_job(id) do
+      {:ok, job} ->
+        json(conn, %{data: job_json(job)})
+
+      {:error, :not_found} ->
+        conn |> put_status(:not_found) |> json(%{error: "not found"})
+
+      {:error, :already_finished} ->
+        conn |> put_status(:conflict) |> json(%{error: "job has already finished"})
+    end
+  end
+
   def requeue_all(conn, _params) do
     {:ok, count} = DistributedTaskQueue.requeue_all_dead_letter_jobs()
     json(conn, %{data: %{requeued: count}})

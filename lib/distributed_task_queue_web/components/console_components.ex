@@ -202,6 +202,8 @@ defmodule DistributedTaskQueueWeb.ConsoleComponents do
   def status_hint(%{status: status}) when status in ["discarded", "dead"],
     do: "Gave up — it ran out of tries"
 
+  def status_hint(%{status: "cancelled"}), do: "Stopped by hand — retry to run it again"
+
   def status_hint(_), do: ""
 
   @doc "HH:MM in UTC."
@@ -215,6 +217,7 @@ defmodule DistributedTaskQueueWeb.ConsoleComponents do
   def status_name("retryable"), do: "Retrying"
   def status_name("discarded"), do: "Discarded"
   def status_name("dead"), do: "Dead letter"
+  def status_name("cancelled"), do: "Stopped"
   def status_name(status), do: String.capitalize(status)
 
   defp status_tone(%{dead_letter: true}), do: tone(:rose)

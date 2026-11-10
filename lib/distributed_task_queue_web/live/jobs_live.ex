@@ -7,7 +7,14 @@ defmodule DistributedTaskQueueWeb.JobsLive do
 
   alias DistributedTaskQueue.{Dashboard, Events, Job, Webhooks}
   alias DistributedTaskQueue.Webhooks.{Request, Target}
-  alias DistributedTaskQueueWeb.{CoreComponents, JsonField, LiveRefresh, WebhookFields, WebhookForm}
+  alias DistributedTaskQueueWeb.{
+    CoreComponents,
+    JobActions,
+    JsonField,
+    LiveRefresh,
+    WebhookFields,
+    WebhookForm
+  }
 
   @filter_keys ~w(queue status errors q)
 
@@ -191,6 +198,12 @@ defmodule DistributedTaskQueueWeb.JobsLive do
   end
 
   ## Row actions
+
+  def handle_event("retry", %{"id" => id}, socket),
+    do: {:noreply, socket |> JobActions.retry(id) |> LiveRefresh.refresh()}
+
+  def handle_event("stop", %{"id" => id}, socket),
+    do: {:noreply, socket |> JobActions.stop(id) |> LiveRefresh.refresh()}
 
   def handle_event("delete", %{"id" => id}, socket) do
     socket =
@@ -446,7 +459,24 @@ defmodule DistributedTaskQueueWeb.JobsLive do
             <td class={[td_class(), "whitespace-nowrap text-right text-zinc-500 dark:text-zinc-400"]}>
               <.rel_time at={job.updated_at} now={@now} />
             </td>
-            <td class={[td_class(), "text-right"]}>
+            <td class={[td_class(), "whitespace-nowrap text-right"]}>
+              <.btn
+                :if={JobActions.retryable?(job)}
+                size={:sm}
+                phx-click="retry"
+                phx-value-id={job.id}
+              >
+                {JobActions.retry_label(job)}
+              </.btn>
+              <.btn
+                :if={JobActions.stoppable?(job)}
+                size={:sm}
+                phx-click="stop"
+                phx-value-id={job.id}
+                data-confirm={"Stop job ##{job.id}?"}
+              >
+                Stop
+              </.btn>
               <.btn
                 :if={job.status != "started"}
                 size={:sm}

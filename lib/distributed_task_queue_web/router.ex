@@ -62,6 +62,8 @@ defmodule DistributedTaskQueueWeb.Router do
     post "/webhooks", WebhookController, :create
 
     post "/jobs/:id/requeue", JobController, :requeue
+    post "/jobs/:id/retry", JobController, :retry
+    post "/jobs/:id/stop", JobController, :stop
     post "/jobs/requeue_dead_letter", JobController, :requeue_all
     resources "/jobs", JobController, only: [:index, :show, :create, :delete]
 

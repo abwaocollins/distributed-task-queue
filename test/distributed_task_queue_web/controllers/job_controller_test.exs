@@ -148,6 +148,41 @@ defmodule DistributedTaskQueueWeb.JobControllerTest do
     end
   end
 
+  describe "POST /api/jobs/:id/retry" do
+    test "runs a finished job again", %{conn: conn} do
+      queue = insert(:queue, name: "ctrl-retry-#{System.unique_integer([:positive])}")
+      on_exit(fn -> DistributedTaskQueue.WorkerSupervisor.stop_queue(queue.name) end)
+      {:ok, _} = DistributedTaskQueue.pause_queue(queue.name)
+      job = insert(:job, queue_name: queue.name, status: "completed", worker_id: 1)
+
+      conn = post(conn, ~p"/api/jobs/#{job.id}/retry")
+      assert %{"data" => %{"status" => "pending", "attempts" => 0}} = json_response(conn, 200)
+    end
+
+    test "409 for a running job, 404 for an unknown one", %{conn: conn} do
+      job = insert(:job, status: "started", worker_id: 1)
+      assert %{"error" => _} = conn |> post(~p"/api/jobs/#{job.id}/retry") |> json_response(409)
+      assert %{"error" => _} = conn |> post(~p"/api/jobs/0/retry") |> json_response(404)
+    end
+  end
+
+  describe "POST /api/jobs/:id/stop" do
+    test "stops a waiting job", %{conn: conn} do
+      queue = insert(:queue, name: "ctrl-stop-#{System.unique_integer([:positive])}")
+      {:ok, _} = DistributedTaskQueue.pause_queue(queue.name)
+      job = insert(:job, queue_name: queue.name)
+
+      conn = post(conn, ~p"/api/jobs/#{job.id}/stop")
+      assert %{"data" => %{"status" => "cancelled"}} = json_response(conn, 200)
+    end
+
+    test "409 for a finished job, 404 for an unknown one", %{conn: conn} do
+      job = insert(:job, status: "completed")
+      assert %{"error" => _} = conn |> post(~p"/api/jobs/#{job.id}/stop") |> json_response(409)
+      assert %{"error" => _} = conn |> post(~p"/api/jobs/0/stop") |> json_response(404)
+    end
+  end
+
   describe "POST /api/jobs/requeue_dead_letter" do
     test "requeues all dead-letter jobs and returns the count", %{conn: conn} do
       queue = insert(:queue, name: "ctrl-bulk-#{System.unique_integer([:positive])}")

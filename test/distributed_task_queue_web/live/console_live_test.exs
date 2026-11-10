@@ -323,6 +323,41 @@ defmodule DistributedTaskQueueWeb.ConsoleLiveTest do
       assert html =~ "Failed on every attempt"
     end
 
+    test "a failed job can be retried and a waiting one stopped", %{conn: conn} do
+      queue = insert(:queue)
+      cleanup_queue(queue.name)
+      {:ok, _} = DistributedTaskQueue.pause_queue(queue.name)
+      failed = insert(:job, queue_name: queue.name, status: "discarded", dead_letter: true)
+
+      {:ok, view, _html} = live(conn, ~p"/jobs/#{failed.id}")
+      refute has_element?(view, "button", "Stop")
+      assert view |> element("button", "Retry") |> render_click() =~ "will run again"
+      assert %Job{status: "pending", dead_letter: false} = Repo.reload!(failed)
+
+      # Now waiting, it offers Stop, and Retry becomes "Run now".
+      assert has_element?(view, "button", "Run now")
+      assert view |> element("button", "Stop") |> render_click() =~ "stopped"
+      assert %Job{status: "cancelled"} = Repo.reload!(failed)
+      assert render(view) =~ "Stopped"
+    end
+
+    test "the job list offers Retry and Stop per row", %{conn: conn} do
+      queue = insert(:queue)
+      cleanup_queue(queue.name)
+      {:ok, _} = DistributedTaskQueue.pause_queue(queue.name)
+      waiting = insert(:job, queue_name: queue.name)
+      done = insert(:job, queue_name: queue.name, status: "completed")
+
+      {:ok, view, _html} = live(conn, ~p"/jobs")
+      refute has_element?(view, "#job-#{done.id} button", "Stop")
+
+      view |> element("#job-#{waiting.id} button", "Stop") |> render_click()
+      assert Repo.reload!(waiting).status == "cancelled"
+
+      view |> element("#job-#{done.id} button", "Retry") |> render_click()
+      assert Repo.reload!(done).status == "pending"
+    end
+
     test "non-webhook jobs keep the raw payload panel", %{conn: conn} do
       job = insert(:job)
       {:ok, view, _html} = live(conn, ~p"/jobs/#{job.id}")

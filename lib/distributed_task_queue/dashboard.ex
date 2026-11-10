@@ -11,7 +11,7 @@ defmodule DistributedTaskQueue.Dashboard do
 
   @page_size 25
 
-  @statuses ~w(pending started retryable completed discarded)
+  @statuses ~w(pending started retryable completed discarded cancelled)
 
   def page_size, do: @page_size
   def statuses, do: @statuses

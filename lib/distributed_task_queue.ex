@@ -124,6 +124,126 @@ defmodule DistributedTaskQueue do
     {:ok, count}
   end
 
+  @retry_from ~w(pending retryable completed discarded cancelled)
+  @stop_from ~w(pending retryable)
+
+  @doc """
+  Run a job again from scratch: attempts reset, error cleared, due now.
+
+  Works on any job that is not running — a finished one (completed, discarded
+  or stopped) runs again, and a waiting one (scheduled or backing off) runs now
+  instead of later. Returns `{:ok, job}`, or `{:error, :job_running |
+  :not_retryable | :not_found}`.
+  """
+  def retry_job(job_id) do
+    # Conditional, so a job claimed between the caller's look and this update is
+    # left alone rather than flipped back to pending under a running worker.
+    result =
+      Repo.update_all(
+        from(j in Job, where: j.id == ^job_id and j.status in ^@retry_from, select: j),
+        set: [
+          status: "pending",
+          dead_letter: false,
+          attempts: 0,
+          worker_id: nil,
+          attempted_by: nil,
+          error_message: nil,
+          scheduled_at: nil,
+          next_retry_at: nil,
+          started_at: nil,
+          completed_at: nil,
+          discarded_at: nil,
+          updated_at: DateTime.utc_now() |> DateTime.truncate(:second)
+        ]
+      )
+
+    case result do
+      {1, [job]} ->
+        ensure_queue_running(job.queue_name)
+        {:ok, job}
+
+      _ ->
+        case Repo.get(Job, job_id) do
+          nil -> {:error, :not_found}
+          %Job{status: "started"} -> {:error, :job_running}
+          _ -> {:error, :not_retryable}
+        end
+    end
+  end
+
+  @doc """
+  Stop a job so it does not run, or does not keep running.
+
+  A waiting job (pending, scheduled or backing off) simply never runs. A
+  running one has its worker process killed, on whichever node runs it, before
+  it is marked stopped. Either way it ends with status `"cancelled"` and can be
+  brought back with `retry_job/1`.
+
+  Returns `{:ok, job}`, or `{:error, :already_finished | :not_found}`.
+  """
+  def cancel_job(job_id) do
+    case Repo.get(Job, job_id) do
+      nil ->
+        {:error, :not_found}
+
+      %Job{status: status} = job when status in @stop_from ->
+        case mark_cancelled(job.id, @stop_from) do
+          # Claimed since we looked: go round again and stop it as a running job.
+          {:error, :changed} -> cancel_job(job_id)
+          ok -> ok
+        end
+
+      %Job{status: "started"} = job ->
+        kill_running(job)
+
+        # Only if it is still marked running: a worker that finished just before
+        # the kill keeps its real result.
+        case mark_cancelled(job.id, ["started"]) do
+          {:error, :changed} -> {:error, :already_finished}
+          ok -> ok
+        end
+
+      _ ->
+        {:error, :already_finished}
+    end
+  end
+
+  defp mark_cancelled(job_id, from_statuses) do
+    result =
+      Repo.update_all(
+        from(j in Job, where: j.id == ^job_id and j.status in ^from_statuses, select: j),
+        set: [
+          status: "cancelled",
+          worker_id: nil,
+          next_retry_at: nil,
+          updated_at: DateTime.utc_now() |> DateTime.truncate(:second)
+        ]
+      )
+
+    case result do
+      {1, [job]} -> {:ok, job}
+      _ -> {:error, :changed}
+    end
+  end
+
+  # attempted_by is "<node>:<queue>". The manager running the job lives on that
+  # node, so ask it there; if the node is gone there is nothing left to kill.
+  defp kill_running(%Job{attempted_by: attempted_by} = job) when is_binary(attempted_by) do
+    [node | _] = String.split(attempted_by, ":", parts: 2)
+
+    if node == Atom.to_string(Node.self()) do
+      QueueManager.cancel(job.queue_name, job.id)
+    else
+      :erpc.call(String.to_existing_atom(node), QueueManager, :cancel, [job.queue_name, job.id], 5_000)
+    end
+  rescue
+    _ -> :not_running
+  catch
+    _, _ -> :not_running
+  end
+
+  defp kill_running(_job), do: :not_running
+
   @doc """
   Start the queue's manager, or wake it if it is already running, so a newly
   available job is claimed now.
@@ -286,36 +406,47 @@ defmodule DistributedTaskQueue do
   def update_job_status(job_id, new_status, error_message \\ nil) do
     job = Repo.get(Job, job_id)
 
-    if job do
-      extra =
-        case new_status do
-          "started" ->
-            %{"started_at" => DateTime.utc_now()}
+    cond do
+      is_nil(job) ->
+        {:error, "Job not found"}
 
-          "completed" ->
-            %{"completed_at" => DateTime.utc_now()}
+      # Stopped by hand. A worker that could not be killed (its node was
+      # unreachable) must not overwrite that with its own result later.
+      job.status == "cancelled" ->
+        {:ok, job}
 
-          "discarded" ->
-            %{"discarded_at" => DateTime.utc_now(), "error_message" => error_message, "dead_letter" => true}
-
-          "retryable" ->
-            %{
-              "error_message" => error_message || "Job failed",
-              "attempts" => job.attempts + 1,
-              "next_retry_at" => DateTime.add(DateTime.utc_now(), backoff_seconds(job.attempts), :second),
-              "worker_id" => nil
-            }
-
-          _ ->
-            %{}
-        end
-
-      job
-      |> Job.changeset(Map.merge(extra, %{"status" => new_status}))
-      |> Repo.update()
-    else
-      {:error, "Job not found"}
+      true ->
+        put_job_status(job, new_status, error_message)
     end
+  end
+
+  defp put_job_status(job, new_status, error_message) do
+    extra =
+      case new_status do
+        "started" ->
+          %{"started_at" => DateTime.utc_now()}
+
+        "completed" ->
+          %{"completed_at" => DateTime.utc_now()}
+
+        "discarded" ->
+          %{"discarded_at" => DateTime.utc_now(), "error_message" => error_message, "dead_letter" => true}
+
+        "retryable" ->
+          %{
+            "error_message" => error_message || "Job failed",
+            "attempts" => job.attempts + 1,
+            "next_retry_at" => DateTime.add(DateTime.utc_now(), backoff_seconds(job.attempts), :second),
+            "worker_id" => nil
+          }
+
+        _ ->
+          %{}
+      end
+
+    job
+    |> Job.changeset(Map.merge(extra, %{"status" => new_status}))
+    |> Repo.update()
   end
 
   # Exponential backoff: 15 * 2^attempts, capped at 1 hour.

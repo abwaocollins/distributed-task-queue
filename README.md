@@ -100,8 +100,8 @@ Every enqueue goes through `add_job/2`, which starts the queue's manager or wake
 |---|---|
 | **Overview** `/` | Job totals (each links to the filtered list), recent failures with their errors, the next cron runs, and a *Needs attention* panel. |
 | **Queues** `/queues` | Depth, in-flight work against concurrency, retrying and dead counts per queue. Create, edit, pause/resume, delete. |
-| **Jobs** `/jobs` | Filter by queue, status or "has an error", or search by job id, worker or error text. Filters live in the URL, so a filtered view can be bookmarked or linked. Create a job with a JSON payload; delete. |
-| **Job detail** `/jobs/:id` | Full error message, payload, attempt count, which node claimed it, and a timeline from enqueue to completion or discard. Requeue if dead-lettered. |
+| **Jobs** `/jobs` | Filter by queue, status or "has an error", or search by job id, worker or error text. Filters live in the URL, so a filtered view can be bookmarked or linked. Create a job with a JSON payload; retry, stop or delete any row. |
+| **Job detail** `/jobs/:id` | Full error message, payload, attempt count, which node claimed it, and a timeline from enqueue to completion or discard. Retry (or *Run now* while it waits), Stop, or delete. |
 | **Dead letter** `/dead-letter` | Exhausted jobs with their last error, filterable by queue or text. Requeue one, requeue exactly the jobs the filter shows, or delete. |
 | **Cron** `/cron` | Schedules with next and last run. Create and edit with a cron expression plus timezone, or a fixed interval; enable/disable; delete. |
 
@@ -188,6 +188,8 @@ curl -X POST localhost:4000/api/jobs \
 | `POST` | `/api/jobs` | Enqueue a job |
 | `POST` | `/api/webhooks` | Enqueue a webhook: an HTTP request to deliver now or later (see [Webhooks](#webhooks)) |
 | `DELETE` | `/api/jobs/:id` | Soft-delete a job |
+| `POST` | `/api/jobs/:id/retry` | Run a job again from scratch: a finished one (completed, discarded, stopped) reruns, a waiting one runs now. `409` if it is running |
+| `POST` | `/api/jobs/:id/stop` | Stop a job: a waiting one never runs, a running one has its worker killed on whichever node runs it. Status becomes `cancelled`; `409` if it already finished |
 | `POST` | `/api/jobs/:id/requeue` | Requeue one dead-lettered job |
 | `POST` | `/api/jobs/requeue_dead_letter` | Requeue every dead-lettered job |
 | `GET` | `/api/cron_jobs` | List cron jobs |

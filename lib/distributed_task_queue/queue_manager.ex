@@ -56,6 +56,22 @@ defmodule DistributedTaskQueue.QueueManager do
     :exit, _ -> MapSet.new()
   end
 
+  @doc """
+  Kill the worker running `job_id` on this node's manager for `queue_name`.
+
+  Returns `:ok` once the worker is dead and its slot is free, or `:not_running`
+  if this manager is not running that job. It does not touch the job's row;
+  `DistributedTaskQueue.cancel_job/1` owns that.
+  """
+  def cancel(queue_name, job_id) do
+    case Registry.lookup(DistributedTaskQueue.WorkerRegistry, queue_name) do
+      [{pid, _}] -> GenServer.call(pid, {:cancel, job_id})
+      [] -> :not_running
+    end
+  catch
+    :exit, _ -> :not_running
+  end
+
   def init(%{max: max} = state) do
     Process.flag(:trap_exit, true)
     # Look for work straight away. The manager is started because something
@@ -67,6 +83,41 @@ defmodule DistributedTaskQueue.QueueManager do
   def handle_call(:running_job_ids, _from, state) do
     ids = state.task_slots |> Map.values() |> MapSet.new(fn {_pid, job_id} -> job_id end)
     {:reply, ids, state}
+  end
+
+  def handle_call({:cancel, job_id}, _from, state) do
+    case Enum.find(state.task_slots, fn {_slot, {_pid, id}} -> id == job_id end) do
+      nil ->
+        {:reply, :not_running, state}
+
+      {slot, {pid, _}} ->
+        Process.exit(pid, :kill)
+
+        # We trap exits, so wait for the task's exit here rather than in
+        # handle_info: the caller is told :ok only once the worker is dead.
+        receive do
+          {:EXIT, ^pid, _} -> :ok
+        after
+          5_000 -> :ok
+        end
+
+        # A task that finished just before the kill already sent :job_done.
+        # Drop it, or the slot would be returned twice.
+        receive do
+          {:job_done, ^slot, _} -> :ok
+        after
+          0 -> :ok
+        end
+
+        send(self(), :poll)
+
+        {:reply, :ok,
+         %{state |
+           running: max(0, state.running - 1),
+           free_slots: return_slot(state.free_slots, slot, state.max),
+           task_slots: Map.delete(state.task_slots, slot)
+         }}
+    end
   end
 
   def handle_call(:wake, _from, state) do
