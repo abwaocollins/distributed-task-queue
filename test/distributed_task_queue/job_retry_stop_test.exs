@@ -154,6 +154,45 @@ defmodule DistributedTaskQueue.JobRetryStopTest do
     end
   end
 
+  describe "bulk_job_action/2" do
+    test "applies the action to each job and reports the ones it skipped", %{queue: queue} do
+      {:ok, _} = DistributedTaskQueue.pause_queue(queue.name)
+      done = insert(:job, queue_name: queue.name, status: "completed")
+      failed = insert(:job, queue_name: queue.name, status: "discarded", dead_letter: true)
+      running = insert(:job, queue_name: queue.name, status: "started", worker_id: 1)
+
+      assert {:ok, %{succeeded: succeeded, failed: skipped}} =
+               DistributedTaskQueue.bulk_job_action("retry", [done.id, running.id, failed.id, 0])
+
+      assert succeeded == [done.id, failed.id]
+      assert skipped == [{running.id, :job_running}, {0, :not_found}]
+      assert status(done) == "pending"
+      assert status(running) == "started"
+    end
+
+    test "stop and delete", %{queue: queue} do
+      {:ok, _} = DistributedTaskQueue.pause_queue(queue.name)
+      a = insert(:job, queue_name: queue.name)
+      b = insert(:job, queue_name: queue.name, status: "completed")
+
+      assert {:ok, %{succeeded: [_], failed: [{_, :already_finished}]}} =
+               DistributedTaskQueue.bulk_job_action("stop", [a.id, b.id])
+
+      assert {:ok, %{succeeded: [_, _], failed: []}} =
+               DistributedTaskQueue.bulk_job_action("delete", [a.id, b.id, a.id])
+
+      assert status(a) == "deleted"
+      assert status(b) == "deleted"
+    end
+
+    test "rejects an unknown action or too many ids" do
+      assert {:error, :unknown_action} = DistributedTaskQueue.bulk_job_action("explode", [1])
+
+      assert {:error, :too_many} =
+               DistributedTaskQueue.bulk_job_action("retry", Enum.to_list(1..1_001))
+    end
+  end
+
   defp manager(queue) do
     [{pid, _}] = Registry.lookup(DistributedTaskQueue.WorkerRegistry, queue.name)
     pid

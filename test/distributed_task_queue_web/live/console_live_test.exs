@@ -138,6 +138,44 @@ defmodule DistributedTaskQueueWeb.ConsoleLiveTest do
     end
   end
 
+  describe "queues bulk" do
+    test "pauses and resumes the selected queues only", %{conn: conn} do
+      a = insert(:queue)
+      b = insert(:queue)
+      other = insert(:queue)
+      Enum.each([a, b, other], &cleanup_queue(&1.name))
+
+      {:ok, view, _html} = live(conn, ~p"/queues")
+      refute has_element?(view, "#bulk-bar")
+
+      view |> element("#select-#{a.name}") |> render_click()
+      view |> element("#select-#{b.name}") |> render_click()
+      assert view |> element("#bulk-bar button", "Pause") |> render_click() =~ "Paused 2 queues."
+
+      assert Repo.reload!(a).paused
+      assert Repo.reload!(b).paused
+      refute Repo.reload!(other).paused
+      refute has_element?(view, "#bulk-bar")
+
+      view |> element("#select-#{a.name}") |> render_click()
+      assert view |> element("#bulk-bar button", "Resume") |> render_click() =~ "Resumed 1 queue."
+      refute Repo.reload!(a).paused
+    end
+
+    test "deletes the selected queues", %{conn: conn} do
+      a = insert(:queue)
+      keep = insert(:queue)
+      Enum.each([a, keep], &cleanup_queue(&1.name))
+
+      {:ok, view, _html} = live(conn, ~p"/queues")
+      view |> element("#select-#{a.name}") |> render_click()
+      assert view |> element("#bulk-bar button", "Delete") |> render_click() =~ "Deleted 1 queue."
+
+      refute Repo.get_by(Queue, name: a.name)
+      assert Repo.get_by(Queue, name: keep.name)
+    end
+  end
+
   describe "jobs" do
     test "filters by status, queue, errors and search", %{conn: conn} do
       emails = insert(:queue, name: "emails")
@@ -358,6 +396,48 @@ defmodule DistributedTaskQueueWeb.ConsoleLiveTest do
       assert Repo.reload!(done).status == "pending"
     end
 
+    test "bulk actions apply to the selected jobs only", %{conn: conn} do
+      queue = insert(:queue)
+      cleanup_queue(queue.name)
+      {:ok, _} = DistributedTaskQueue.pause_queue(queue.name)
+      a = insert(:job, queue_name: queue.name)
+      b = insert(:job, queue_name: queue.name, status: "completed")
+      untouched = insert(:job, queue_name: queue.name)
+
+      {:ok, view, _html} = live(conn, ~p"/jobs?queue=#{queue.name}")
+      refute has_element?(view, "#bulk-bar")
+
+      view |> element("#select-#{a.id}") |> render_click()
+      view |> element("#select-#{b.id}") |> render_click()
+      assert view |> element("#bulk-bar") |> render() =~ "2 selected"
+
+      html = view |> element("#bulk-bar button", "Stop") |> render_click()
+      assert html =~ "Stopped 1 job. Skipped 1: already finished."
+
+      assert Repo.reload!(a).status == "cancelled"
+      assert Repo.reload!(b).status == "completed"
+      assert Repo.reload!(untouched).status == "pending"
+      refute has_element?(view, "#bulk-bar")
+    end
+
+    test "select-all picks every job on the page and toggles off", %{conn: conn} do
+      queue = insert(:queue)
+      cleanup_queue(queue.name)
+      {:ok, _} = DistributedTaskQueue.pause_queue(queue.name)
+      insert(:job, queue_name: queue.name, status: "completed")
+      insert(:job, queue_name: queue.name, status: "completed")
+
+      {:ok, view, _html} = live(conn, ~p"/jobs?queue=#{queue.name}")
+      view |> element("#select-page") |> render_click()
+      assert view |> element("#bulk-bar") |> render() =~ "2 selected"
+
+      assert view |> element("#bulk-bar button", "Retry") |> render_click() =~ "Retried 2 jobs."
+
+      view |> element("#select-page") |> render_click()
+      view |> element("#select-page") |> render_click()
+      refute has_element?(view, "#bulk-bar")
+    end
+
     test "non-webhook jobs keep the raw payload panel", %{conn: conn} do
       job = insert(:job)
       {:ok, view, _html} = live(conn, ~p"/jobs/#{job.id}")
@@ -503,6 +583,65 @@ defmodule DistributedTaskQueueWeb.ConsoleLiveTest do
       assert html =~ "Requeued 1 job"
       refute Repo.reload!(in_a).dead_letter
       assert Repo.reload!(other).dead_letter
+    end
+  end
+
+  describe "dead letter bulk" do
+    test "requeues and deletes the selected jobs", %{conn: conn} do
+      queue = insert(:queue)
+      cleanup_queue(queue.name)
+      {:ok, _} = DistributedTaskQueue.pause_queue(queue.name)
+      dead = fn -> insert(:job, queue_name: queue.name, status: "discarded", dead_letter: true) end
+      [a, b, c] = [dead.(), dead.(), dead.()]
+
+      {:ok, view, _html} = live(conn, ~p"/dead-letter?queue=#{queue.name}")
+      view |> element("#select-#{a.id}") |> render_click()
+      view |> element("#select-#{b.id}") |> render_click()
+
+      assert view |> element("#bulk-bar button", "Requeue") |> render_click() =~
+               "Requeued 2 jobs."
+
+      assert %Job{status: "pending", dead_letter: false} = Repo.reload!(a)
+      assert %Job{status: "pending", dead_letter: false} = Repo.reload!(b)
+      assert Repo.reload!(c).dead_letter
+
+      view |> element("#select-page") |> render_click()
+      assert view |> element("#bulk-bar button", "Delete") |> render_click() =~ "Deleted 1 job."
+      assert Repo.reload!(c).status == "deleted"
+    end
+  end
+
+  describe "cron bulk" do
+    test "disables, enables and deletes the selected cron jobs", %{conn: conn} do
+      a = insert(:cron_job)
+      b = insert(:cron_job, enabled: false)
+      keep = insert(:cron_job)
+
+      {:ok, view, _html} = live(conn, ~p"/cron")
+      view |> element("#select-#{a.id}") |> render_click()
+      view |> element("#select-#{b.id}") |> render_click()
+
+      assert view |> element("#bulk-bar button", "Disable") |> render_click() =~
+               "Disabled 1 cron job. Skipped 1: already disabled."
+
+      refute Repo.reload!(a).enabled
+      assert Repo.reload!(keep).enabled
+
+      view |> element("#select-#{a.id}") |> render_click()
+      view |> element("#select-#{b.id}") |> render_click()
+
+      assert view |> element("#bulk-bar button", "Enable") |> render_click() =~
+               "Enabled 2 cron jobs."
+
+      assert Repo.reload!(a).enabled and Repo.reload!(b).enabled
+
+      view |> element("#select-#{a.id}") |> render_click()
+
+      assert view |> element("#bulk-bar button", "Delete") |> render_click() =~
+               "Deleted 1 cron job."
+
+      refute Repo.get(CronJob, a.id)
+      assert Repo.get(CronJob, keep.id)
     end
   end
 

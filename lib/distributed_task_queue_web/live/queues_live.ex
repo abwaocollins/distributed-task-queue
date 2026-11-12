@@ -1,16 +1,25 @@
 defmodule DistributedTaskQueueWeb.QueuesLive do
-  @moduledoc "Queue list with create, edit, pause/resume and delete."
+  @moduledoc "Queue list with create, edit, pause/resume and delete, one at a time or in bulk."
   use DistributedTaskQueueWeb, :live_view
 
   alias DistributedTaskQueue.{Dashboard, Events, Queue}
-  alias DistributedTaskQueueWeb.LiveRefresh
+  alias DistributedTaskQueueWeb.{LiveRefresh, Selection}
+
+  @bulk %{
+    "pause" => {:pause_queue, "Paused"},
+    "resume" => {:resume_queue, "Resumed"},
+    "delete" => {:delete_queue, "Deleted"}
+  }
 
   @impl true
   def mount(_params, _session, socket) do
     {:ok, socket |> assign(page_title: "Queues", nav: :queues) |> refresh()}
   end
 
-  def refresh(socket), do: assign(socket, queues: Dashboard.queue_summaries())
+  def refresh(socket) do
+    queues = Dashboard.queue_summaries()
+    socket |> Selection.track(Enum.map(queues, & &1.name)) |> assign(queues: queues)
+  end
 
   @impl true
   def handle_params(params, _url, socket), do: {:noreply, apply_action(socket, params)}
@@ -61,6 +70,21 @@ defmodule DistributedTaskQueueWeb.QueuesLive do
     end
   end
 
+  def handle_event("select" <> _ = event, params, socket),
+    do: {:noreply, Selection.handle_event(event, params, socket)}
+
+  def handle_event("bulk", %{"action" => action}, socket) when is_map_key(@bulk, action) do
+    {fun, verb} = Map.fetch!(@bulk, action)
+    result = Selection.run(Selection.selected_ids(socket), &apply(DistributedTaskQueue, fun, [&1]))
+    Events.broadcast([:dtq, :console, :queue_changed])
+
+    {:noreply,
+     socket
+     |> Selection.clear()
+     |> put_flash(:info, Selection.summary(verb, {"queue", "queues"}, result, &skip_reason/1))
+     |> LiveRefresh.refresh()}
+  end
+
   def handle_event("pause", %{"name" => name}, socket),
     do: {:noreply, run(socket, name, &DistributedTaskQueue.pause_queue/1, "paused")}
 
@@ -69,6 +93,9 @@ defmodule DistributedTaskQueueWeb.QueuesLive do
 
   def handle_event("delete", %{"name" => name}, socket),
     do: {:noreply, run(socket, name, &DistributedTaskQueue.delete_queue/1, "deleted")}
+
+  defp skip_reason(:queue_not_found), do: "gone"
+  defp skip_reason(_), do: "could not be changed"
 
   defp changeset_for(queue, :new, params), do: Queue.changeset(queue, params)
   defp changeset_for(queue, :edit, params), do: Queue.update_changeset(queue, params)
@@ -117,10 +144,31 @@ defmodule DistributedTaskQueueWeb.QueuesLive do
       No queues yet. Create one to start enqueueing jobs.
     </.empty_state>
 
+    <Selection.bulk_bar selected={@selected}>
+      <.btn size={:sm} phx-click="bulk" phx-value-action="pause">Pause</.btn>
+      <.btn size={:sm} phx-click="bulk" phx-value-action="resume">Resume</.btn>
+      <.btn
+        size={:sm}
+        variant={:danger}
+        phx-click="bulk"
+        phx-value-action="delete"
+        data-confirm={"Delete #{MapSet.size(@selected)} selected queues? All their jobs are deleted and cron jobs pointing at them are disabled."}
+      >
+        Delete
+      </.btn>
+    </Selection.bulk_bar>
+
     <.surface :if={@queues != []}>
       <table class="w-full text-left text-sm">
         <thead class={thead_class()}>
           <tr>
+            <th class={[th_class(), "w-8"]}>
+              <Selection.page_checkbox
+                selectable={@selectable}
+                selected={@selected}
+                label="Select every queue"
+              />
+            </th>
             <th class={th_class()}>Queue</th>
             <th class={th_class()}>State</th>
             <th class={[th_class(), "text-right"]}>Pending</th>
@@ -133,6 +181,9 @@ defmodule DistributedTaskQueueWeb.QueuesLive do
         </thead>
         <tbody class={tbody_class()}>
           <tr :for={q <- @queues} id={"queue-#{q.name}"}>
+            <td class={td_class()}>
+              <Selection.checkbox id={q.name} selected={@selected} label={"Select queue #{q.name}"} />
+            </td>
             <td class={td_class()}>
               <.link navigate={~p"/jobs?queue=#{q.name}"} class={row_link_class()}>
                 {q.name}

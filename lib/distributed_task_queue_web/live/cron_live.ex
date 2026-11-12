@@ -1,5 +1,5 @@
 defmodule DistributedTaskQueueWeb.CronLive do
-  @moduledoc "Cron jobs with create, edit, enable/disable and delete."
+  @moduledoc "Cron jobs with create, edit, enable/disable and delete, one at a time or in bulk."
   use DistributedTaskQueueWeb, :live_view
 
   alias DistributedTaskQueue.{CronJob, Dashboard, Events, Webhooks}
@@ -10,6 +10,7 @@ defmodule DistributedTaskQueueWeb.CronLive do
     JsonField,
     LiveRefresh,
     ScheduleText,
+    Selection,
     WebhookFields,
     WebhookForm
   }
@@ -30,8 +31,12 @@ defmodule DistributedTaskQueueWeb.CronLive do
   end
 
   def refresh(socket) do
-    assign(socket,
-      crons: Dashboard.cron_jobs(),
+    crons = Dashboard.cron_jobs()
+
+    socket
+    |> Selection.track(Enum.map(crons, & &1.id))
+    |> assign(
+      crons: crons,
       missing: Map.new(Dashboard.crons_missing_queue()),
       queue_names: Dashboard.queue_names()
     )
@@ -199,6 +204,22 @@ defmodule DistributedTaskQueueWeb.CronLive do
     {:noreply, assign(socket, header_rows: rows)}
   end
 
+  def handle_event("select" <> _ = event, params, socket),
+    do: {:noreply, Selection.handle_event(event, params, socket)}
+
+  def handle_event("bulk", %{"action" => action}, socket)
+      when action in ~w(enable disable delete) do
+    result = Selection.run(Selection.selected_ids(socket), &bulk_cron(action, &1))
+    Events.broadcast([:dtq, :console, :cron_changed], %{action: action})
+    verb = %{"enable" => "Enabled", "disable" => "Disabled", "delete" => "Deleted"}[action]
+
+    {:noreply,
+     socket
+     |> Selection.clear()
+     |> put_flash(:info, Selection.summary(verb, {"cron job", "cron jobs"}, result, &skip_reason/1))
+     |> LiveRefresh.refresh()}
+  end
+
   def handle_event("toggle", %{"id" => id}, socket) do
     socket =
       with %CronJob{} = cron <- DistributedTaskQueue.get_cron_job(id),
@@ -236,6 +257,24 @@ defmodule DistributedTaskQueueWeb.CronLive do
 
     {:noreply, LiveRefresh.refresh(socket)}
   end
+
+  # Enabling restarts a schedule from now, so a cron that is already in the
+  # wanted state is skipped rather than having its next run moved.
+  defp bulk_cron(action, id) do
+    case {action, DistributedTaskQueue.get_cron_job(id)} do
+      {_, nil} -> {:error, :not_found}
+      {"enable", %CronJob{enabled: true}} -> {:error, :already_enabled}
+      {"enable", cron} -> DistributedTaskQueue.enable_cron_job(cron)
+      {"disable", %CronJob{enabled: false}} -> {:error, :already_disabled}
+      {"disable", cron} -> DistributedTaskQueue.disable_cron_job(cron)
+      {"delete", cron} -> DistributedTaskQueue.delete_cron_job(cron)
+    end
+  end
+
+  defp skip_reason(:not_found), do: "gone"
+  defp skip_reason(:already_enabled), do: "already enabled"
+  defp skip_reason(:already_disabled), do: "already disabled"
+  defp skip_reason(_), do: "could not be changed"
 
   defp save(socket, attrs) do
     result =
@@ -382,10 +421,31 @@ defmodule DistributedTaskQueueWeb.CronLive do
       in config.
     </.empty_state>
 
+    <Selection.bulk_bar selected={@selected}>
+      <.btn size={:sm} phx-click="bulk" phx-value-action="enable">Enable</.btn>
+      <.btn size={:sm} phx-click="bulk" phx-value-action="disable">Disable</.btn>
+      <.btn
+        size={:sm}
+        variant={:danger}
+        phx-click="bulk"
+        phx-value-action="delete"
+        data-confirm={bulk_delete_confirm(@selected, @crons, @config_names)}
+      >
+        Delete
+      </.btn>
+    </Selection.bulk_bar>
+
     <.surface :if={@crons != []}>
       <table class="w-full text-left text-sm">
         <thead class={thead_class()}>
           <tr>
+            <th class={[th_class(), "w-8"]}>
+              <Selection.page_checkbox
+                selectable={@selectable}
+                selected={@selected}
+                label="Select every cron job"
+              />
+            </th>
             <th class={th_class()}>Name</th>
             <th class={th_class()}>Schedule</th>
             <th class={th_class()}>Queue</th>
@@ -396,6 +456,13 @@ defmodule DistributedTaskQueueWeb.CronLive do
         </thead>
         <tbody class={tbody_class()}>
           <tr :for={cron <- @crons} id={"cron-#{cron.id}"} class={!cron.enabled && "opacity-60"}>
+            <td class={td_class()}>
+              <Selection.checkbox
+                id={cron.id}
+                selected={@selected}
+                label={"Select cron job #{cron.name}"}
+              />
+            </td>
             <td class={td_class()}>
               <div class="flex items-center gap-2">
                 <span class="font-medium text-zinc-900 dark:text-zinc-100">{cron.name}</span>
@@ -594,6 +661,16 @@ defmodule DistributedTaskQueueWeb.CronLive do
       </.simple_form>
     </.modal>
     """
+  end
+
+  defp bulk_delete_confirm(selected, crons, config_names) do
+    from_config =
+      Enum.count(crons, &(MapSet.member?(selected, &1.id) and MapSet.member?(config_names, &1.name)))
+
+    "Delete #{MapSet.size(selected)} selected cron jobs?" <>
+      if from_config > 0,
+        do: " #{from_config} declared in config will be recreated at the next boot.",
+        else: ""
   end
 
   defp delete_confirm(cron, config_names) do

@@ -183,6 +183,35 @@ defmodule DistributedTaskQueueWeb.JobControllerTest do
     end
   end
 
+  describe "POST /api/jobs/bulk" do
+    test "reports which jobs changed and which were skipped", %{conn: conn} do
+      queue = insert(:queue, name: "ctrl-bulk-op-#{System.unique_integer([:positive])}")
+      {:ok, _} = DistributedTaskQueue.pause_queue(queue.name)
+      waiting = insert(:job, queue_name: queue.name)
+      done = insert(:job, queue_name: queue.name, status: "completed")
+
+      conn = post(conn, ~p"/api/jobs/bulk", %{"action" => "stop", "ids" => [waiting.id, done.id]})
+
+      assert %{"data" => %{"succeeded" => [id], "failed" => [%{"id" => skipped, "error" => error}]}} =
+               json_response(conn, 200)
+
+      assert {id, skipped, error} == {waiting.id, done.id, "already_finished"}
+    end
+
+    test "422 for a bad action, bad ids or a missing body", %{conn: conn} do
+      for body <- [
+            %{"action" => "explode", "ids" => [1]},
+            %{"action" => "retry", "ids" => ["1"]},
+            %{"action" => "retry", "ids" => [-1]},
+            %{"action" => "retry", "ids" => [9_223_372_036_854_775_808]},
+            %{"action" => "retry"},
+            %{}
+          ] do
+        assert %{"error" => _} = conn |> post(~p"/api/jobs/bulk", body) |> json_response(422)
+      end
+    end
+  end
+
   describe "POST /api/jobs/requeue_dead_letter" do
     test "requeues all dead-letter jobs and returns the count", %{conn: conn} do
       queue = insert(:queue, name: "ctrl-bulk-#{System.unique_integer([:positive])}")

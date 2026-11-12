@@ -65,6 +65,7 @@ defmodule DistributedTaskQueueWeb.Router do
     post "/jobs/:id/retry", JobController, :retry
     post "/jobs/:id/stop", JobController, :stop
     post "/jobs/requeue_dead_letter", JobController, :requeue_all
+    post "/jobs/bulk", JobController, :bulk
     resources "/jobs", JobController, only: [:index, :show, :create, :delete]
 
     post "/cron_jobs/:id/enable", CronJobController, :enable

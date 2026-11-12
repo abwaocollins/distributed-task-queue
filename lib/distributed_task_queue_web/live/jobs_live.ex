@@ -12,6 +12,7 @@ defmodule DistributedTaskQueueWeb.JobsLive do
     JobActions,
     JsonField,
     LiveRefresh,
+    Selection,
     WebhookFields,
     WebhookForm
   }
@@ -36,7 +37,9 @@ defmodule DistributedTaskQueueWeb.JobsLive do
     filters = params |> Map.take(@filter_keys) |> Map.reject(fn {_k, v} -> v in [nil, ""] end)
 
     socket
+    # A selection belongs to the rows it was made on, so a new filter or page starts empty.
     |> assign(filters: filters, page: parse_page(params["page"]))
+    |> Selection.clear()
     |> apply_action(socket.assigns.live_action)
     |> refresh()
     |> then(&{:noreply, &1})
@@ -44,9 +47,12 @@ defmodule DistributedTaskQueueWeb.JobsLive do
 
   def refresh(socket) do
     %{filters: filters, page: page} = socket.assigns
+    jobs = Dashboard.list_jobs(filters, page)
 
-    assign(socket,
-      jobs: Dashboard.list_jobs(filters, page),
+    socket
+    |> Selection.track(Enum.map(jobs, & &1.id))
+    |> assign(
+      jobs: jobs,
       total: Dashboard.count_jobs(filters),
       queue_names: Dashboard.queue_names()
     )
@@ -198,6 +204,30 @@ defmodule DistributedTaskQueueWeb.JobsLive do
   end
 
   ## Row actions
+
+  ## Selection and bulk actions
+
+  def handle_event("select" <> _ = event, params, socket),
+    do: {:noreply, Selection.handle_event(event, params, socket)}
+
+  def handle_event("bulk", %{"action" => action}, socket) do
+    ids = Selection.selected_ids(socket)
+
+    socket =
+      case DistributedTaskQueue.bulk_job_action(action, ids) do
+        {:ok, result} ->
+          Events.broadcast([:dtq, :console, :jobs_bulk], %{action: action})
+
+          socket
+          |> Selection.clear()
+          |> put_flash(:info, JobActions.bulk_summary(action, result))
+
+        {:error, _} ->
+          put_flash(socket, :error, "That bulk action is not available.")
+      end
+
+    {:noreply, LiveRefresh.refresh(socket)}
+  end
 
   def handle_event("retry", %{"id" => id}, socket),
     do: {:noreply, socket |> JobActions.retry(id) |> LiveRefresh.refresh()}
@@ -422,10 +452,38 @@ defmodule DistributedTaskQueueWeb.JobsLive do
       No jobs match these filters.
     </.empty_state>
 
+    <Selection.bulk_bar selected={@selected}>
+      <.btn size={:sm} phx-click="bulk" phx-value-action="retry">Retry</.btn>
+      <.btn
+        size={:sm}
+        phx-click="bulk"
+        phx-value-action="stop"
+        data-confirm={"Stop #{MapSet.size(@selected)} selected jobs?"}
+      >
+        Stop
+      </.btn>
+      <.btn
+        size={:sm}
+        variant={:danger}
+        phx-click="bulk"
+        phx-value-action="delete"
+        data-confirm={"Delete #{MapSet.size(@selected)} selected jobs?"}
+      >
+        Delete
+      </.btn>
+    </Selection.bulk_bar>
+
     <.surface :if={@jobs != []}>
       <table class="w-full text-left text-sm">
         <thead class={thead_class()}>
           <tr>
+            <th class={[th_class(), "w-8"]}>
+              <Selection.page_checkbox
+                selectable={@selectable}
+                selected={@selected}
+                label="Select every job on this page"
+              />
+            </th>
             <th class={th_class()}>Job</th>
             <th class={th_class()}>Worker</th>
             <th class={th_class()}>Status</th>
@@ -438,6 +496,9 @@ defmodule DistributedTaskQueueWeb.JobsLive do
         </thead>
         <tbody class={tbody_class()}>
           <tr :for={job <- @jobs} id={"job-#{job.id}"}>
+            <td class={td_class()}>
+              <Selection.checkbox id={job.id} selected={@selected} label={"Select job ##{job.id}"} />
+            </td>
             <td class={[td_class(), "whitespace-nowrap"]}>
               <.link navigate={~p"/jobs/#{job.id}"} class={[row_link_class(), "font-mono"]}>
                 #{job.id}

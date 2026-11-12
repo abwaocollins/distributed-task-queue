@@ -208,6 +208,53 @@ defmodule DistributedTaskQueue do
     end
   end
 
+  @bulk_actions %{
+    "retry" => :retry_job,
+    "stop" => :cancel_job,
+    "delete" => :delete_job,
+    "requeue" => :requeue_dead_letter_job
+  }
+  @max_bulk 1_000
+
+  def bulk_actions, do: Map.keys(@bulk_actions)
+  def max_bulk, do: @max_bulk
+
+  @doc """
+  Apply `"retry"`, `"stop"`, `"delete"` or `"requeue"` (dead-letter only) to
+  each job in `ids`.
+
+  Each job gets exactly what the single-job function would do, so the rules
+  stay in one place: a job the action does not apply to (retrying a running
+  job, stopping a finished one) is reported rather than failing the batch.
+
+  Returns `{:ok, %{succeeded: [id], failed: [{id, reason}]}}`, in `ids` order,
+  or `{:error, :unknown_action | :too_many}`.
+  """
+  def bulk_job_action(action, ids) when is_list(ids) do
+    cond do
+      not Map.has_key?(@bulk_actions, action) ->
+        {:error, :unknown_action}
+
+      length(ids) > @max_bulk ->
+        {:error, :too_many}
+
+      true ->
+        {:ok, run_bulk(Map.fetch!(@bulk_actions, action), Enum.uniq(ids))}
+    end
+  end
+
+  defp run_bulk(fun, ids) do
+    {succeeded, failed} =
+      Enum.reduce(ids, {[], []}, fn id, {ok, errors} ->
+        case apply(__MODULE__, fun, [id]) do
+          {:ok, _job} -> {[id | ok], errors}
+          {:error, reason} -> {ok, [{id, reason} | errors]}
+        end
+      end)
+
+    %{succeeded: Enum.reverse(succeeded), failed: Enum.reverse(failed)}
+  end
+
   defp mark_cancelled(job_id, from_statuses) do
     result =
       Repo.update_all(

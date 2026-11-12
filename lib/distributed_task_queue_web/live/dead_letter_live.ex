@@ -3,7 +3,7 @@ defmodule DistributedTaskQueueWeb.DeadLetterLive do
   use DistributedTaskQueueWeb, :live_view
 
   alias DistributedTaskQueue.{Dashboard, Events}
-  alias DistributedTaskQueueWeb.LiveRefresh
+  alias DistributedTaskQueueWeb.{JobActions, LiveRefresh, Selection}
 
   @impl true
   def mount(_params, _session, socket) do
@@ -15,14 +15,18 @@ defmodule DistributedTaskQueueWeb.DeadLetterLive do
     {:noreply,
      socket
      |> assign(queue: blank_to_nil(params["queue"]), q: blank_to_nil(params["q"]))
+     |> Selection.clear()
      |> refresh()}
   end
 
   def refresh(socket) do
     filters = filters(socket.assigns)
+    jobs = Dashboard.list_jobs(filters)
 
-    assign(socket,
-      jobs: Dashboard.list_jobs(filters),
+    socket
+    |> Selection.track(Enum.map(jobs, & &1.id))
+    |> assign(
+      jobs: jobs,
       total: Dashboard.count_jobs(filters),
       queue_names: Dashboard.queue_names()
     )
@@ -38,6 +42,20 @@ defmodule DistributedTaskQueueWeb.DeadLetterLive do
       |> Map.reject(fn {_k, v} -> v in [nil, ""] end)
 
     {:noreply, push_patch(socket, to: ~p"/dead-letter?#{query}")}
+  end
+
+  def handle_event("select" <> _ = event, params, socket),
+    do: {:noreply, Selection.handle_event(event, params, socket)}
+
+  def handle_event("bulk", %{"action" => action}, socket) when action in ~w(requeue delete) do
+    {:ok, result} = DistributedTaskQueue.bulk_job_action(action, Selection.selected_ids(socket))
+    Events.broadcast([:dtq, :console, :jobs_bulk], %{action: action})
+
+    {:noreply,
+     socket
+     |> Selection.clear()
+     |> put_flash(:info, JobActions.bulk_summary(action, result))
+     |> LiveRefresh.refresh()}
   end
 
   def handle_event("requeue", %{"id" => id}, socket) do
@@ -160,10 +178,30 @@ defmodule DistributedTaskQueueWeb.DeadLetterLive do
       No dead-letter jobs match these filters.
     </.empty_state>
 
+    <Selection.bulk_bar selected={@selected}>
+      <.btn size={:sm} phx-click="bulk" phx-value-action="requeue">Requeue</.btn>
+      <.btn
+        size={:sm}
+        variant={:danger}
+        phx-click="bulk"
+        phx-value-action="delete"
+        data-confirm={"Delete #{MapSet.size(@selected)} selected jobs? They will not be retried."}
+      >
+        Delete
+      </.btn>
+    </Selection.bulk_bar>
+
     <.surface :if={@jobs != []}>
       <table class="w-full text-left text-sm">
         <thead class={thead_class()}>
           <tr>
+            <th class={[th_class(), "w-8"]}>
+              <Selection.page_checkbox
+                selectable={@selectable}
+                selected={@selected}
+                label="Select every job shown"
+              />
+            </th>
             <th class={th_class()}>Job</th>
             <th class={th_class()}>Worker</th>
             <th class={[th_class(), "w-1/2"]}>Last error</th>
@@ -173,6 +211,9 @@ defmodule DistributedTaskQueueWeb.DeadLetterLive do
         </thead>
         <tbody class={tbody_class()}>
           <tr :for={job <- @jobs} id={"dead-#{job.id}"}>
+            <td class={td_class()}>
+              <Selection.checkbox id={job.id} selected={@selected} label={"Select job ##{job.id}"} />
+            </td>
             <td class={[td_class(), "whitespace-nowrap"]}>
               <.link navigate={~p"/jobs/#{job.id}"} class={[row_link_class(), "font-mono"]}>
                 #{job.id}

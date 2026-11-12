@@ -93,6 +93,41 @@ defmodule DistributedTaskQueueWeb.JobController do
     end
   end
 
+  def bulk(conn, %{"action" => action, "ids" => ids}) when is_list(ids) do
+    # Bounded to bigint, or Postgrex raises on an id the column cannot hold.
+    with true <- Enum.all?(ids, &(is_integer(&1) and &1 in 1..9_223_372_036_854_775_807)),
+         {:ok, %{succeeded: succeeded, failed: failed}} <-
+           DistributedTaskQueue.bulk_job_action(action, ids) do
+      json(conn, %{
+        data: %{
+          succeeded: succeeded,
+          failed: Enum.map(failed, fn {id, reason} -> %{id: id, error: bulk_error(reason)} end)
+        }
+      })
+    else
+      false ->
+        bulk_unprocessable(conn, "ids must be a list of positive integer job ids")
+
+      {:error, :unknown_action} ->
+        bulk_unprocessable(
+          conn,
+          "action must be one of: #{Enum.join(DistributedTaskQueue.bulk_actions(), ", ")}"
+        )
+
+      {:error, :too_many} ->
+        bulk_unprocessable(conn, "at most #{DistributedTaskQueue.max_bulk()} ids per request")
+    end
+  end
+
+  def bulk(conn, _params),
+    do: bulk_unprocessable(conn, ~s(expected {"action": ..., "ids": [...]}))
+
+  defp bulk_unprocessable(conn, message),
+    do: conn |> put_status(:unprocessable_entity) |> json(%{error: message})
+
+  defp bulk_error(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp bulk_error(_reason), do: "could_not_change"
+
   def requeue_all(conn, _params) do
     {:ok, count} = DistributedTaskQueue.requeue_all_dead_letter_jobs()
     json(conn, %{data: %{requeued: count}})
