@@ -2,6 +2,8 @@
 // https://tailwindcss.com/docs/configuration
 
 const plugin = require("tailwindcss/plugin")
+const colors = require("tailwindcss/colors")
+const defaultTheme = require("tailwindcss/defaultTheme")
 const fs = require("fs")
 const path = require("path")
 
@@ -14,7 +16,18 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        brand: "#FD4F00",
+        // Interactive accent only (primary action, active nav, focus, selection).
+        // Violet stays clear of the status hues: sky, emerald, amber, rose.
+        accent: colors.violet,
+      },
+      fontFamily: {
+        sans: ["Inter", ...defaultTheme.fontFamily.sans],
+        mono: ["JetBrains Mono", ...defaultTheme.fontFamily.mono],
+      },
+      boxShadow: {
+        // Stacked, low-opacity layers (Vercel-style) instead of one heavy drop.
+        card: "0 1px 1px rgb(0 0 0 / 0.02), 0 2px 4px -1px rgb(0 0 0 / 0.04)",
+        pop: "0 1px 1px rgb(0 0 0 / 0.02), 0 8px 16px -4px rgb(0 0 0 / 0.06), 0 24px 32px -8px rgb(0 0 0 / 0.08)",
       }
     },
   },

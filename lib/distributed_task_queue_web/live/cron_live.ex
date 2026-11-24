@@ -591,7 +591,7 @@ defmodule DistributedTaskQueueWeb.CronLive do
                 name="cron[schedule_type]"
                 value="cron"
                 checked={@schedule_type == "cron"}
-                class="border-zinc-300 text-zinc-900 focus:ring-0 dark:border-zinc-600 dark:bg-zinc-800"
+                class="border-zinc-300 text-accent-600 focus:ring-0 dark:border-zinc-600 dark:bg-zinc-800"
               /> Cron expression
             </label>
             <label class="flex items-center gap-2">
@@ -600,7 +600,7 @@ defmodule DistributedTaskQueueWeb.CronLive do
                 name="cron[schedule_type]"
                 value="interval"
                 checked={@schedule_type == "interval"}
-                class="border-zinc-300 text-zinc-900 focus:ring-0 dark:border-zinc-600 dark:bg-zinc-800"
+                class="border-zinc-300 text-accent-600 focus:ring-0 dark:border-zinc-600 dark:bg-zinc-800"
               /> Fixed interval
             </label>
           </div>

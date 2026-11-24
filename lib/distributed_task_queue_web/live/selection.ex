@@ -113,7 +113,7 @@ defmodule DistributedTaskQueueWeb.Selection do
       aria-label={@label}
       phx-click="select_page"
       checked={@selectable != [] and Enum.all?(@selectable, &MapSet.member?(@selected, &1))}
-      class="rounded border-zinc-300 dark:border-zinc-700"
+      class="rounded border-zinc-300 text-accent-600 focus:ring-accent-500 dark:border-zinc-700 dark:bg-zinc-800"
     />
     """
   end
@@ -131,7 +131,7 @@ defmodule DistributedTaskQueueWeb.Selection do
       phx-click="select"
       phx-value-id={@id}
       checked={MapSet.member?(@selected, @id)}
-      class="rounded border-zinc-300 dark:border-zinc-700"
+      class="rounded border-zinc-300 text-accent-600 focus:ring-accent-500 dark:border-zinc-700 dark:bg-zinc-800"
     />
     """
   end
@@ -144,9 +144,9 @@ defmodule DistributedTaskQueueWeb.Selection do
     <div
       :if={MapSet.size(@selected) > 0}
       id="bulk-bar"
-      class="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900"
+      class="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-accent-200 bg-accent-50 px-3 py-2 text-sm dark:border-accent-400/20 dark:bg-accent-400/10"
     >
-      <span class="mr-1 font-medium">{MapSet.size(@selected)} selected</span>
+      <span class="mr-1 font-medium text-accent-800 dark:text-accent-200">{MapSet.size(@selected)} selected</span>
       {render_slot(@inner_block)}
       <.btn size={:sm} phx-click="select_clear" class="ml-auto">Clear selection</.btn>
     </div>

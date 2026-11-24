@@ -2,4 +2,17 @@
 @import "tailwindcss/components";
 @import "tailwindcss/utilities";
 
-/* This file is for your main application CSS */
+/* Inter's disambiguated digits and straight-sided glyphs read better in dense tables. */
+body {
+  font-feature-settings: "cv11", "ss01", "ss03";
+}
+
+::selection {
+  @apply bg-accent-200 text-accent-950;
+}
+
+@media (prefers-color-scheme: dark) {
+  ::selection {
+    @apply bg-accent-400/30 text-white;
+  }
+}

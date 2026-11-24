@@ -66,7 +66,7 @@ defmodule DistributedTaskQueueWeb.CoreComponents do
               phx-window-keydown={JS.exec("data-cancel", to: "##{@id}")}
               phx-key="escape"
               phx-click-away={JS.exec("data-cancel", to: "##{@id}")}
-              class="shadow-zinc-700/10 ring-zinc-700/10 relative hidden rounded-2xl bg-white p-6 shadow-lg ring-1 transition sm:p-10 dark:bg-zinc-900 dark:ring-zinc-700"
+              class="ring-zinc-900/5 relative hidden rounded-2xl bg-white p-6 shadow-pop ring-1 transition sm:p-10 dark:bg-zinc-900 dark:ring-zinc-700"
             >
               <div class="absolute top-6 right-5">
                 <button
@@ -318,7 +318,7 @@ defmodule DistributedTaskQueueWeb.CoreComponents do
           name={@name}
           value="true"
           checked={@checked}
-          class="rounded border-zinc-300 text-zinc-900 focus:ring-0 dark:border-zinc-600 dark:bg-zinc-800"
+          class="rounded border-zinc-300 text-accent-600 focus:ring-0 dark:border-zinc-600 dark:bg-zinc-800"
           {@rest}
         />
         {@label}
@@ -335,7 +335,7 @@ defmodule DistributedTaskQueueWeb.CoreComponents do
       <select
         id={@id}
         name={@name}
-        class="mt-2 block w-full rounded-lg border border-zinc-300 bg-white text-zinc-900 shadow-sm focus:border-zinc-400 focus:ring-0 sm:text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+        class="mt-2 block w-full rounded-lg border border-zinc-300 bg-white text-zinc-900 shadow-sm focus:border-accent-500 focus:ring-0 sm:text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
         multiple={@multiple}
         {@rest}
       >
@@ -357,7 +357,7 @@ defmodule DistributedTaskQueueWeb.CoreComponents do
         class={[
           "mt-2 block w-full rounded-lg bg-white text-zinc-900 focus:ring-0 sm:text-sm sm:leading-6 min-h-[6rem]",
           "dark:bg-zinc-800 dark:text-zinc-100",
-          @errors == [] && "border-zinc-300 focus:border-zinc-400 dark:border-zinc-700",
+          @errors == [] && "border-zinc-300 focus:border-accent-500 dark:border-zinc-700",
           @errors != [] && "border-rose-400 focus:border-rose-400"
         ]}
         {@rest}
@@ -380,7 +380,7 @@ defmodule DistributedTaskQueueWeb.CoreComponents do
         class={[
           "mt-2 block w-full rounded-lg bg-white text-zinc-900 focus:ring-0 sm:text-sm sm:leading-6",
           "dark:bg-zinc-800 dark:text-zinc-100",
-          @errors == [] && "border-zinc-300 focus:border-zinc-400 dark:border-zinc-700",
+          @errors == [] && "border-zinc-300 focus:border-accent-500 dark:border-zinc-700",
           @errors != [] && "border-rose-400 focus:border-rose-400"
         ]}
         {@rest}

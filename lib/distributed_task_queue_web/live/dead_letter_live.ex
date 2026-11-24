@@ -160,12 +160,12 @@ defmodule DistributedTaskQueueWeb.DeadLetterLive do
         aria-label="Search"
         placeholder="Job id, worker or error text"
         phx-debounce="300"
-        class="block w-full rounded-lg border-zinc-300 bg-white text-sm text-zinc-900 focus:border-zinc-400 focus:ring-0 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+        class="block w-full rounded-lg border-zinc-300 bg-white text-sm text-zinc-900 focus:border-accent-500 focus:ring-0 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
       />
       <select
         name="filters[queue]"
         aria-label="Queue"
-        class="block w-full rounded-lg border-zinc-300 bg-white text-sm text-zinc-900 focus:border-zinc-400 focus:ring-0 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+        class="block w-full rounded-lg border-zinc-300 bg-white text-sm text-zinc-900 focus:border-accent-500 focus:ring-0 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
       >
         {Phoenix.HTML.Form.options_for_select([{"All queues", ""} | @queue_names], @queue)}
       </select>

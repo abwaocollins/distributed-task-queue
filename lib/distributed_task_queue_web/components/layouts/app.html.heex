@@ -1,16 +1,33 @@
-<header class="sticky top-0 z-30 border-b border-zinc-200 bg-zinc-50/90 px-4 backdrop-blur sm:px-6 lg:px-8 dark:border-zinc-800 dark:bg-zinc-950/90">
+<header class="sticky top-0 z-30 border-b border-zinc-200/80 bg-white/80 px-4 backdrop-blur-md sm:px-6 lg:px-8 dark:border-zinc-800/80 dark:bg-zinc-950/80">
   <div class="mx-auto flex h-14 max-w-7xl items-center gap-6">
     <.link
       navigate={~p"/"}
-      class="shrink-0 text-sm font-semibold text-zinc-900 dark:text-zinc-100"
+      class="flex shrink-0 items-center gap-2 text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
     >
+      <span class="grid h-6 w-6 place-items-center rounded-md bg-gradient-to-b from-accent-500 to-accent-700 text-white shadow-sm shadow-accent-700/30 ring-1 ring-inset ring-white/15">
+        <.icon name="hero-queue-list-micro" class="h-3.5 w-3.5" />
+      </span>
       dtq
     </.link>
-    <nav aria-label="Console" class="-mx-1 flex min-w-0 flex-1 gap-1 overflow-x-auto text-sm">
-      <.nav_link navigate={~p"/"} active={assigns[:nav] == :overview}>Overview</.nav_link>
-      <.nav_link navigate={~p"/queues"} active={assigns[:nav] == :queues}>Queues</.nav_link>
-      <.nav_link navigate={~p"/jobs"} active={assigns[:nav] == :jobs}>Jobs</.nav_link>
-      <.nav_link navigate={~p"/dead-letter"} active={assigns[:nav] == :dead_letter}>
+    <nav aria-label="Console" class="-mx-1 flex min-w-0 flex-1 gap-0.5 overflow-x-auto text-sm">
+      <.nav_link navigate={~p"/"} icon="hero-squares-2x2-mini" active={assigns[:nav] == :overview}>
+        Overview
+      </.nav_link>
+      <.nav_link
+        navigate={~p"/queues"}
+        icon="hero-rectangle-stack-mini"
+        active={assigns[:nav] == :queues}
+      >
+        Queues
+      </.nav_link>
+      <.nav_link navigate={~p"/jobs"} icon="hero-bolt-mini" active={assigns[:nav] == :jobs}>
+        Jobs
+      </.nav_link>
+      <.nav_link
+        navigate={~p"/dead-letter"}
+        icon="hero-archive-box-x-mark-mini"
+        active={assigns[:nav] == :dead_letter}
+      >
         Dead letter
         <span
           :if={(assigns[:dead_count] || 0) > 0}
@@ -20,21 +37,23 @@
           {@dead_count}
         </span>
       </.nav_link>
-      <.nav_link navigate={~p"/cron"} active={assigns[:nav] == :cron}>Cron</.nav_link>
+      <.nav_link navigate={~p"/cron"} icon="hero-clock-mini" active={assigns[:nav] == :cron}>
+        Cron
+      </.nav_link>
     </nav>
     <div class="hidden shrink-0 items-center gap-4 text-sm text-zinc-500 md:flex dark:text-zinc-400">
       <a
         :if={DistributedTaskQueueWeb.Auth.requirement(:dashboard) != :locked}
         href="/admin/dashboard"
-        class="hover:text-zinc-900 dark:hover:text-zinc-100"
+        class="flex items-center gap-1.5 hover:text-zinc-900 dark:hover:text-zinc-100"
       >
-        BEAM metrics
+        <.icon name="hero-cpu-chip-mini" class="h-4 w-4" /> BEAM metrics
       </a>
       <a
         href="https://github.com/abwaocollins/distributed-task-queue"
-        class="hover:text-zinc-900 dark:hover:text-zinc-100"
+        class="flex items-center gap-1.5 hover:text-zinc-900 dark:hover:text-zinc-100"
       >
-        Source
+        <.icon name="hero-code-bracket-mini" class="h-4 w-4" /> Source
       </a>
     </div>
   </div>

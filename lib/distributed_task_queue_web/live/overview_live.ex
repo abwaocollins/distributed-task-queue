@@ -78,15 +78,31 @@ defmodule DistributedTaskQueueWeb.OverviewLive do
       <DemoControls.panel :if={@demo_mode} receivers={@receivers} />
       <nav
         aria-label="Job totals"
-        class="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-zinc-200 bg-zinc-200 sm:grid-cols-5 dark:border-zinc-800 dark:bg-zinc-800"
+        class="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-zinc-200/80 bg-zinc-200/80 shadow-card sm:grid-cols-5 dark:border-zinc-800 dark:bg-zinc-800 dark:shadow-none"
       >
         <.stat label="Pending" value={@totals.pending} navigate={~p"/jobs?status=pending"} />
-        <.stat label="Running" value={@totals.running} navigate={~p"/jobs?status=started"} />
-        <.stat label="Retrying" value={@totals.retryable} navigate={~p"/jobs?status=retryable"} />
-        <.stat label="Completed" value={@totals.completed} navigate={~p"/jobs?status=completed"} />
+        <.stat
+          label="Running"
+          value={@totals.running}
+          dot="bg-sky-500"
+          navigate={~p"/jobs?status=started"}
+        />
+        <.stat
+          label="Retrying"
+          value={@totals.retryable}
+          dot="bg-amber-500"
+          navigate={~p"/jobs?status=retryable"}
+        />
+        <.stat
+          label="Completed"
+          value={@totals.completed}
+          dot="bg-emerald-500"
+          navigate={~p"/jobs?status=completed"}
+        />
         <.stat
           label="Dead letter"
           value={@totals.dead}
+          dot="bg-rose-500"
           alert={@totals.dead > 0}
           navigate={~p"/dead-letter"}
           class="col-span-2 sm:col-span-1"
@@ -234,7 +250,7 @@ defmodule DistributedTaskQueueWeb.OverviewLive do
     <section
       id="demo-intro"
       phx-hook="DismissOnce"
-      class="rounded-xl border border-zinc-200 bg-white px-5 py-4 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300"
+      class="relative overflow-hidden rounded-xl border border-accent-200/70 bg-gradient-to-br from-accent-50 via-white to-white px-5 py-4 text-sm text-zinc-700 shadow-card dark:border-accent-400/20 dark:from-accent-400/10 dark:via-zinc-900 dark:to-zinc-900 dark:text-zinc-300 dark:shadow-none"
     >
       <div class="flex items-start justify-between gap-4">
         <p class="font-medium text-zinc-900 dark:text-zinc-100">

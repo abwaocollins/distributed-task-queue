@@ -2,9 +2,12 @@ defmodule DistributedTaskQueueWeb.ConsoleComponents do
   @moduledoc """
   Building blocks and formatting helpers shared by the console pages.
 
-  Visual rules: zinc neutrals, colour only where it carries state (job status,
-  errors, warnings), one radius scale (`rounded-lg` controls, `rounded-xl`
-  panels), numbers in mono with tabular figures.
+  Visual rules: zinc neutrals, one violet `accent` for interaction (primary
+  button, active nav, focus, selection), other colour only where it carries
+  state (job status, errors, warnings), one radius scale (`rounded-lg` controls,
+  `rounded-xl` panels), tabular figures everywhere: mono for IDs and table
+  numbers, sans for headline KPIs. Statuses are dot pills; depth comes from
+  hairlines plus the soft `shadow-card` in light mode, hairlines only in dark.
   """
   use Phoenix.Component
 
@@ -59,7 +62,7 @@ defmodule DistributedTaskQueueWeb.ConsoleComponents do
   def surface(assigns) do
     ~H"""
     <div class={[
-      "overflow-x-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900",
+      "overflow-x-auto rounded-xl border border-zinc-200/80 bg-white shadow-card dark:border-zinc-800 dark:bg-zinc-900/60 dark:shadow-none",
       @class
     ]}>
       {render_slot(@inner_block)}
@@ -71,8 +74,11 @@ defmodule DistributedTaskQueueWeb.ConsoleComponents do
 
   def empty_state(assigns) do
     ~H"""
-    <div class="rounded-xl border border-dashed border-zinc-300 px-4 py-10 text-center text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
-      {render_slot(@inner_block)}
+    <div class="flex flex-col items-center gap-3 rounded-xl border border-dashed border-zinc-300 bg-white/50 px-4 py-10 text-center text-sm text-zinc-500 dark:border-zinc-700 dark:bg-zinc-900/30 dark:text-zinc-400">
+      <span class="grid h-9 w-9 place-items-center rounded-lg bg-zinc-100 text-zinc-400 ring-1 ring-inset ring-zinc-200 dark:bg-zinc-800 dark:text-zinc-500 dark:ring-zinc-700">
+        <.icon name="hero-inbox-mini" class="h-5 w-5" />
+      </span>
+      <div>{render_slot(@inner_block)}</div>
     </div>
     """
   end
@@ -107,10 +113,15 @@ defmodule DistributedTaskQueueWeb.ConsoleComponents do
   ## Tables
 
   def thead_class,
-    do: "border-b border-zinc-200 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
+    do:
+      "border-b border-zinc-200/80 bg-zinc-50/80 text-xs text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400"
 
   def th_class, do: "px-4 py-2.5 font-medium whitespace-nowrap"
-  def tbody_class, do: "divide-y divide-zinc-100 dark:divide-zinc-800"
+
+  def tbody_class,
+    do:
+      "divide-y divide-zinc-100 dark:divide-zinc-800 [&>tr]:transition-colors [&>tr:hover]:bg-zinc-50/70 dark:[&>tr:hover]:bg-zinc-800/30"
+
   def td_class, do: "px-4 py-3"
 
   def num_class,
@@ -154,15 +165,15 @@ defmodule DistributedTaskQueueWeb.ConsoleComponents do
     [
       "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-lg font-medium",
       "transition-colors active:translate-y-px disabled:pointer-events-none disabled:opacity-50",
-      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-500",
+      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500",
       size == :sm && "px-2.5 py-1 text-xs",
       size == :md && "px-3 py-1.5 text-sm",
       variant == :primary &&
-        "bg-zinc-900 text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300",
+        "bg-accent-600 text-white shadow-sm shadow-accent-700/25 ring-1 ring-inset ring-white/10 hover:bg-accent-700 dark:bg-accent-400 dark:text-zinc-950 dark:shadow-none dark:hover:bg-accent-300",
       variant == :secondary &&
-        "border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800",
+        "border border-zinc-200 bg-white text-zinc-700 shadow-card hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:shadow-none dark:hover:bg-zinc-800",
       variant == :danger &&
-        "border border-rose-300 bg-white text-rose-700 hover:bg-rose-50 dark:border-rose-400/30 dark:bg-zinc-900 dark:text-rose-300 dark:hover:bg-rose-400/10"
+        "border border-rose-200 bg-white text-rose-700 shadow-card hover:border-rose-300 hover:bg-rose-50 dark:border-rose-400/30 dark:bg-zinc-900 dark:text-rose-300 dark:shadow-none dark:hover:bg-rose-400/10"
     ]
   end
 
@@ -171,11 +182,22 @@ defmodule DistributedTaskQueueWeb.ConsoleComponents do
   def badge_class,
     do: "inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium whitespace-nowrap"
 
+  @doc "Badge with a leading dot in the text colour, for states rather than tags."
+  def pill_class,
+    do: [
+      "inline-flex items-center gap-1.5 rounded-full py-0.5 pl-2 pr-2.5 text-xs font-medium whitespace-nowrap ring-1 ring-inset ring-black/5 dark:ring-white/10",
+      "before:h-1.5 before:w-1.5 before:rounded-full before:bg-current before:content-['']",
+      "motion-reduce:before:animate-none"
+    ]
+
   attr :job, :map, required: true
 
   def job_status(assigns) do
     ~H"""
-    <span class={[badge_class(), status_tone(@job)]} title={status_hint(@job)}>
+    <span
+      class={[pill_class(), status_tone(@job), @job.status == "started" && "before:animate-pulse"]}
+      title={status_hint(@job)}
+    >
       {status_label(@job)}
     </span>
     """
@@ -208,7 +230,9 @@ defmodule DistributedTaskQueueWeb.ConsoleComponents do
 
   @doc "HH:MM in UTC."
   def hhmm(%NaiveDateTime{} = at), do: Calendar.strftime(at, "%H:%M")
-  def hhmm(%DateTime{} = at), do: at |> DateTime.shift_zone!("Etc/UTC") |> Calendar.strftime("%H:%M")
+
+  def hhmm(%DateTime{} = at),
+    do: at |> DateTime.shift_zone!("Etc/UTC") |> Calendar.strftime("%H:%M")
 
   def status_label(%{dead_letter: true}), do: "Dead letter"
   def status_label(%{status: status}), do: status_name(status)
@@ -240,13 +264,16 @@ defmodule DistributedTaskQueueWeb.ConsoleComponents do
 
   def queue_state(assigns) do
     ~H"""
-    <span :if={@summary.paused} class={[badge_class(), tone(:amber)]}>Paused</span>
-    <span :if={!@summary.paused && @summary.manager_running} class={[badge_class(), tone(:sky)]}>
+    <span :if={@summary.paused} class={[pill_class(), tone(:amber)]}>Paused</span>
+    <span
+      :if={!@summary.paused && @summary.manager_running}
+      class={[pill_class(), tone(:sky), "before:animate-pulse"]}
+    >
       Running
     </span>
     <span
       :if={!@summary.paused && !@summary.manager_running}
-      class={[badge_class(), tone(:zinc)]}
+      class={[pill_class(), tone(:zinc)]}
       title="No manager on this node. Managers stop once their queue drains and restart when work arrives."
     >
       Idle
@@ -277,6 +304,7 @@ defmodule DistributedTaskQueueWeb.ConsoleComponents do
   attr :value, :integer, required: true
   attr :navigate, :string, required: true
   attr :alert, :boolean, default: false
+  attr :dot, :string, default: "bg-zinc-400", doc: "status colour, matching the job pill"
   attr :class, :any, default: nil
 
   def stat(assigns) do
@@ -284,20 +312,33 @@ defmodule DistributedTaskQueueWeb.ConsoleComponents do
     <.link
       navigate={@navigate}
       class={[
-        "block bg-white px-4 py-4 transition-colors hover:bg-zinc-50 dark:bg-zinc-900 dark:hover:bg-zinc-800/60",
+        "group relative block bg-white px-5 py-4 transition-colors hover:bg-zinc-50/80 dark:bg-zinc-900 dark:hover:bg-zinc-800/50",
         @class
       ]}
     >
-      <span class="block text-xs font-medium text-zinc-500 dark:text-zinc-400">{@label}</span>
+      <span class="flex items-center gap-2 text-xs font-medium text-zinc-500 dark:text-zinc-400">
+        <span class={["h-1.5 w-1.5 rounded-full", @dot]} />
+        {@label}
+        <.icon
+          name="hero-arrow-up-right-micro"
+          class="ml-auto h-3.5 w-3.5 text-zinc-400 opacity-0 transition-opacity group-hover:opacity-100"
+        />
+      </span>
       <span class={[
-        "mt-1 block font-mono text-2xl tabular-nums",
+        "mt-2 block text-3xl font-semibold tracking-tight tabular-nums",
         if(@alert, do: "text-rose-600 dark:text-rose-400", else: "text-zinc-900 dark:text-zinc-50")
       ]}>
-        {@value}
+        {delimit(@value)}
       </span>
     </.link>
     """
   end
+
+  @doc "Integer with thousands separators: 12345 -> \"12,345\"."
+  def delimit(n) when is_integer(n) and n < 0, do: "-" <> delimit(-n)
+
+  def delimit(n) when is_integer(n),
+    do: n |> Integer.to_string() |> String.replace(~r/\B(?=(\d{3})+$)/, ",")
 
   ## Formatting
 

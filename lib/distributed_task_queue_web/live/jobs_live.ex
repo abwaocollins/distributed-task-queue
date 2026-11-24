@@ -439,7 +439,7 @@ defmodule DistributedTaskQueueWeb.JobsLive do
           name="filters[errors]"
           value="true"
           checked={@filters["errors"] == "true"}
-          class="rounded border-zinc-300 text-zinc-900 focus:ring-0 dark:border-zinc-600 dark:bg-zinc-800"
+          class="rounded border-zinc-300 text-accent-600 focus:ring-0 dark:border-zinc-600 dark:bg-zinc-800"
         /> With errors
       </label>
       <.btn :if={@filters != %{}} phx-click="clear_filters" class="self-end">Clear</.btn>
@@ -693,6 +693,6 @@ defmodule DistributedTaskQueueWeb.JobsLive do
 
   defp filter_input_class,
     do:
-      "block w-full rounded-lg border-zinc-300 bg-white text-sm text-zinc-900 focus:border-zinc-400 " <>
+      "block w-full rounded-lg border-zinc-300 bg-white text-sm text-zinc-900 focus:border-accent-500 " <>
         "focus:ring-0 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
 end
